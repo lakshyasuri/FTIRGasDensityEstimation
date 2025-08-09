@@ -1,0 +1,8 @@
+scikit-learn
+scipy
+matplotlib
+pandas
+numpy
+pybaselines
+hitran-api
+pandas-stubs
