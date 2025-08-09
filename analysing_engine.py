@@ -1,3 +1,4 @@
+import json
 from typing import Union
 import pandas as pd
 import numpy as np
@@ -7,9 +8,13 @@ import numpy.typing as npt
 import time
 from typing import List, Tuple, Any
 from scipy.optimize import minimize
+from pathlib import Path
+import matplotlib.pyplot as plt
 
 from utils import StatManager, create_plot, create_splines_pipeline, loss_function, \
     jacobian_of_loss, voigt_profile
+from HITRAN import fetch_data
+from config import CONFIG
 
 
 def find_peaks_and_filter(x: Union[pd.Series, np.ndarray],
@@ -197,7 +202,7 @@ def curve_and_peak_fitting_process(x: Union[pd.Series, np.ndarray],
 
     init_params = np.concatenate([splines_beta_init, np.ravel(peak_params)])
 
-    print(f"length of the knot vector: {len(knot_vector)}")
+    print(f"\nlength of the knot vector: {len(knot_vector)}")
     print(f"shape of the spline basis: {X_basis.shape}")
     print(f"the number of spline coefficients are: {n_spline_coeffs}")
     print(f"shape of the splines beta coefficients is: {len(splines_beta_init)}")
@@ -239,15 +244,105 @@ def curve_and_peak_fitting_process(x: Union[pd.Series, np.ndarray],
 
     print(f"total time taken for fitting {round(end_time - start_time, 3)} seconds")
 
-    plot_args = [{"args": (x, -(y - y_bkg)), "kwargs": dict(label="original spectrum")},
-                 {"args": (x, -(y_fit - y_bkg)),
-                  "kwargs": dict(label="bkg + voigt peaks", linestyle='--')},
-                 {"args": (x[peaks], -(y - y_bkg)[peaks], 'x'),
-                  "kwargs": dict(label="prominent peaks")}]
+    plot_args = [
+        {"args": (x, -(y - y_bkg)), "kwargs": dict(label="Baseline-corrected spectrum")},
+        {"args": (x, -y_peak),
+         "kwargs": dict(label="Voigt peaks", linestyle='--')},
+        {"args": (x[peaks], -(y - y_bkg)[peaks], 'x'),
+         "kwargs": dict(label="prominent peaks")}]
     create_plot(plot_args=plot_args, figure_args=dict(figsize=(10, 8)), legend=True,
                 title=f"Region {n_region}: Fit with a Splines background and Voigt "
                       f"peaks. Prior basline correction: {baseline_corrected}",
                 x_label="Wavenumber",
                 y_label="Intensity")
 
-    return y_bkg, y_peak
+    return y_bkg, y_peak, voigt_p_list
+
+
+def hitran_matching_process(peak_params: List[dict],
+                            x: Union[pd.Series, npt.NDArray[float]],
+                            y: Union[pd.Series, npt.NDArray[float]],
+                            peaks: npt.NDArray[int], region: int,
+                            y_bkg: npt.NDArray[float] = None,
+                            y_peaks: npt.NDArray[float] = None):
+    nu_exp = [v["center"] for v in peak_params]
+    fetch_data()
+    hitran_data_path = Path(CONFIG.HITRAN_DATA_DIR) / CONFIG.HITRAN_DATA_NAME
+    nu_hitran = pd.read_csv(hitran_data_path, header=None, sep=r'\s+', usecols=[1])
+    nu_hitran.columns = ["wavenumber"]
+    nu_hitran = nu_hitran["wavenumber"].sort_values().to_numpy()
+
+    match_dict = {}
+    no_matches = []
+    for i, nu in enumerate(nu_exp):
+        low = nu - CONFIG.RESOLUTION
+        high = nu + CONFIG.RESOLUTION
+
+        start_idx = np.searchsorted(nu_hitran, low, "left")
+        end_idx = np.searchsorted(nu_hitran, high, "right")
+
+        potential_matches = nu_hitran[start_idx: end_idx]
+        if len(potential_matches) == 0:
+            no_matches.append((i, nu))
+        else:
+            diffs = abs(nu - potential_matches)
+            nearest_nu_hitran = potential_matches[np.argmin(diffs)]
+            match_dict[i] = [nu, nearest_nu_hitran]
+
+    match_indices = list(match_dict.keys())
+    unmatch_indices = [val[0] for val in no_matches]
+    matched_peaks, unmatched_peaks = peaks[match_indices], peaks[unmatch_indices]
+    print(f"\nVoigt peak centres that matched with HITRAN's CO2 nu values with a "
+          f"tolerance of +- {CONFIG.RESOLUTION}: \n{match_dict}")
+    print(f"\nUnmatched Voigt peak centres with a "
+          f"tolerance of += {CONFIG.RESOLUTION}: \n{no_matches}")
+
+    if y_bkg is not None and y_peaks is not None:
+        y_b_corr = y - y_bkg
+        plot_args = [
+            {"args": (x, -y_b_corr), "kwargs": {"label": "Baseline-corrected spectrum"}},
+            {"args": (x[matched_peaks], -y_b_corr[matched_peaks], 'gx'),
+             "kwargs": {"label": "Matched CO2 peaks"}},
+            {"args": (x[unmatched_peaks], -y_b_corr[unmatched_peaks], 'rx'),
+             "kwargs": {"label": "Unmatched peaks"}},
+            {"args": (x, -y_peaks),
+             "kwargs": {"label": "Estimated Voigt profiles", "linestyle": "--"}}]
+    else:
+        plot_args = [{"args": (x, -y), "kwargs": {"label": "Original spectrum"}},
+                     {"args": (x[matched_peaks], -y[matched_peaks], 'gx'),
+                      "kwargs": {"label": "Matched CO2 peaks"}},
+                     {"args": (x[unmatched_peaks], -y[unmatched_peaks], 'rx'),
+                      "kwargs": {"label": "Unmatched peaks"}}]
+    create_plot(plot_args=plot_args, figure_args={"figsize": (10, 8)},
+                title=f"Region {region}: Spectrum fit with Voigt centres matched "
+                      f"against HITRAN with a tolerance of +- {CONFIG.RESOLUTION}",
+                x_label="Wavenumber", y_label="Intensity", legend=True)
+    # plt.show()
+    # from sklearn.linear_model import LinearRegression
+    # y = [val[1] for val in match_dict.values()]
+    # x = [val[0] for val in match_dict.values()]
+    # X = np.array(x)[:, np.newaxis]
+    # Y = np.array(y)[:, np.newaxis]
+    # model = LinearRegression().fit(X, Y)
+    # y_hat = model.predict(X)
+    # print(model.score(X, Y))
+    # plt.scatter(x, y)
+    # plt.plot(x, y_hat, linestyle="--")
+    # plt.figure()
+    # plt.scatter(x, Y - y_hat)
+    # plt.show()
+
+# if __name__ == "__main__":
+#     import pickle
+#
+#     with open("/Users/lakshya/PycharmProjects/FTIRGasDensityEstimation/voigt_params",
+#               "r") as f:
+#         peak_params = json.load(f)
+#     with open("/Users/lakshya/PycharmProjects/FTIRGasDensityEstimation/peak_indices",
+#               "rb") as f:
+#         peaks = pickle.load(f)
+#     region_df = pd.read_csv(
+#         "/Users/lakshya/PycharmProjects/FTIRGasDensityEstimation/test.csv")
+#     peaks = np.array(peaks, dtype=int)
+#     hitran_matching_process(peak_params, region_df["wavenumber"], -region_df["intensity"],
+#                             peaks)

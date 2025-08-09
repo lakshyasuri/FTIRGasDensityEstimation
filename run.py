@@ -5,6 +5,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 from spectral_analysis import start_analysis
+from config import CONFIG
 
 
 def initialise_process(directory: Path, filename: str = None, plot: bool = True):
@@ -24,8 +25,11 @@ def initialise_process(directory: Path, filename: str = None, plot: bool = True)
     print(f_names)
     for f_name in f_names:
         f_path = directory / f_name
-        df = pd.read_csv(f_path)
+        df = pd.read_csv(f_path, names=["wavenumber", "intensity"], sep="\t")
         df.columns = ["wavenumber", "intensity"]
+        df.sort_values(by="wavenumber", inplace=True)
+        CONFIG.NU_MIN = df["wavenumber"].iloc[0] - 5
+        CONFIG.NU_MAX = df["wavenumber"].iloc[-1] + 5
         start_analysis(df=df, x_name="wavenumber", y_name="intensity", f_path=f_path)
         if plot:
             plt.show()
