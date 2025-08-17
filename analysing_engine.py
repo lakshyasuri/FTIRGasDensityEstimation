@@ -1,17 +1,14 @@
-import json
-from typing import Union
 import pandas as pd
 import numpy as np
 from scipy.signal import find_peaks
 from pybaselines import Baseline
 import numpy.typing as npt
 import time
-from typing import List, Tuple, Any
+from typing import List, Tuple, Any, Union
 from scipy.optimize import minimize
 from pathlib import Path
-import matplotlib.pyplot as plt
 
-from utils import StatManager, create_plot, create_splines_pipeline, loss_function, \
+from utils import find_statistic_symmetrically, create_plot, create_splines_pipeline, loss_function, \
     jacobian_of_loss, voigt_profile
 from HITRAN import fetch_data
 from config import CONFIG
@@ -38,8 +35,7 @@ def peak_finding_process(x: Union[pd.Series, np.ndarray],
                          hyper_params: dict, n_region: int,
                          plots: bool = True):
     w_len = hyper_params["AVG_WINDOW_SIZE"]
-    x_stat_manager = StatManager(window_size=w_len)
-    local_avgs = x_stat_manager.find_statistic_symmetrically(x, y)
+    local_avgs = find_statistic_symmetrically(x, y, w_len, assume_sorted=True)
     peaks, prominences = find_peaks_and_filter(x, y, local_avgs,
                                                hyper_params["PEAK_WLEN"],
                                                hyper_params["PEAK_PROMINENCE"])
@@ -60,6 +56,7 @@ def peak_finding_process(x: Union[pd.Series, np.ndarray],
     print(f"\nNumber of peaks without bases: {len(to_remove)}\n{peaks[to_remove]}")
     if to_remove:
         peaks = np.delete(peaks, to_remove)
+        prominences = np.delete(prominences, to_remove)
     left_bases = np.array(left_bases, dtype=int)
     right_bases = np.array(right_bases, dtype=int)
 
@@ -245,10 +242,11 @@ def curve_and_peak_fitting_process(x: Union[pd.Series, np.ndarray],
     print(f"total time taken for fitting {round(end_time - start_time, 3)} seconds")
 
     plot_args = [
-        {"args": (x, -(y - y_bkg)), "kwargs": dict(label="Baseline-corrected spectrum")},
-        {"args": (x, -y_peak),
-         "kwargs": dict(label="Voigt peaks", linestyle='--')},
-        {"args": (x[peaks], -(y - y_bkg)[peaks], 'x'),
+        {"args": (x, -y), "kwargs": dict(label="Original spectrum")},
+        {"args": (x, -y_fit), "kwargs": dict(label="Baseline + Voigt profiles")},
+        # {"args": (x, -y_peak),
+        #  "kwargs": dict(label="Voigt peaks", linestyle='--')},
+        {"args": (x[peaks], -y[peaks], 'x'),
          "kwargs": dict(label="prominent peaks")}]
     create_plot(plot_args=plot_args, figure_args=dict(figsize=(10, 8)), legend=True,
                 title=f"Region {n_region}: Fit with a Splines background and Voigt "
@@ -265,43 +263,65 @@ def hitran_matching_process(peak_params: List[dict],
                             peaks: npt.NDArray[int], region: int,
                             y_bkg: npt.NDArray[float] = None,
                             y_peaks: npt.NDArray[float] = None):
-    nu_exp = [v["center"] for v in peak_params]
+    nu_exp = np.array([v["center"] for v in peak_params])
     fetch_data()
-    hitran_data_path = Path(CONFIG.HITRAN_DATA_DIR) / CONFIG.HITRAN_DATA_NAME
-    nu_hitran = pd.read_csv(hitran_data_path, header=None, sep=r'\s+', usecols=[1])
-    nu_hitran.columns = ["wavenumber"]
-    nu_hitran = nu_hitran["wavenumber"].sort_values().to_numpy()
+    hitran_data_path_1 = Path(CONFIG.HITRAN_DATA_DIR) / CONFIG.HITRAN_DATA_NAME_1
+    hitran_data_path_2 = Path(CONFIG.HITRAN_DATA_DIR) / CONFIG.HITRAN_DATA_NAME_2
 
-    match_dict = {}
+    nu_hitran_co2 = pd.read_csv(hitran_data_path_1, header=None, sep=r'\s+', usecols=[1])
+    nu_hitran_co2.columns = ["wavenumber"]
+    nu_hitran_co2 = nu_hitran_co2["wavenumber"].sort_values().to_numpy()
+
+    nu_hitran_h2o = pd.read_csv(hitran_data_path_2, header=None, sep=r'\s+', usecols=[1])
+    nu_hitran_h2o.columns = ["wavenumber"]
+    nu_hitran_h2o = nu_hitran_h2o["wavenumber"].sort_values().to_numpy()
+
+    match_dict_co2, match_dict_h2o = {}, {}
     no_matches = []
     for i, nu in enumerate(nu_exp):
         low = nu - CONFIG.RESOLUTION
         high = nu + CONFIG.RESOLUTION
 
-        start_idx = np.searchsorted(nu_hitran, low, "left")
-        end_idx = np.searchsorted(nu_hitran, high, "right")
+        start_idx_co2 = np.searchsorted(nu_hitran_co2, low, "left")
+        end_idx_co2 = np.searchsorted(nu_hitran_co2, high, "right")
+        start_idx_h2o = np.searchsorted(nu_hitran_h2o, low, "left")
+        end_idx_h2o = np.searchsorted(nu_hitran_h2o, high, "right")
 
-        potential_matches = nu_hitran[start_idx: end_idx]
-        if len(potential_matches) == 0:
+        potential_matches_co2 = nu_hitran_co2[start_idx_co2: end_idx_co2]
+        potential_matches_h2o = nu_hitran_h2o[start_idx_h2o: end_idx_h2o]
+        if len(potential_matches_co2) == 0 and len(potential_matches_h2o) == 0:
             no_matches.append((i, nu))
-        else:
-            diffs = abs(nu - potential_matches)
-            nearest_nu_hitran = potential_matches[np.argmin(diffs)]
-            match_dict[i] = [nu, nearest_nu_hitran]
+        if len(potential_matches_co2) > 0:
+            diffs = abs(nu - potential_matches_co2)
+            nearest_nu_hitran = potential_matches_co2[np.argmin(diffs)]
+            match_dict_co2[i] = [nu, nearest_nu_hitran]
+        if len(potential_matches_h2o) > 0:
+            diffs = abs(nu - potential_matches_h2o)
+            nearest_nu_hitran = potential_matches_h2o[np.argmin(diffs)]
+            match_dict_h2o[i] = [nu, nearest_nu_hitran]
 
-    match_indices = list(match_dict.keys())
+    match_indices_co2 = list(match_dict_co2.keys())
+    match_indices_h2o = list(match_dict_h2o.keys())
+    matched_peaks_co2 = peaks[match_indices_co2]
+    matched_peaks_h2o = peaks[match_indices_h2o]
+
     unmatch_indices = [val[0] for val in no_matches]
-    matched_peaks, unmatched_peaks = peaks[match_indices], peaks[unmatch_indices]
+    unmatched_peaks = peaks[unmatch_indices]
     print(f"\nVoigt peak centres that matched with HITRAN's CO2 nu values with a "
-          f"tolerance of +- {CONFIG.RESOLUTION}: \n{match_dict}")
+          f"tolerance of +- {CONFIG.RESOLUTION}: \n{match_dict_co2}")
+    print(f"\nVoigt peak centres that matched with HITRAN's H2O nu values with a "
+          f"tolerance of +- {CONFIG.RESOLUTION}: \n{match_dict_h2o}")
     print(f"\nUnmatched Voigt peak centres with a "
           f"tolerance of += {CONFIG.RESOLUTION}: \n{no_matches}")
+
+    overlap_peak_keys = [i for i in match_indices_co2 if i in match_indices_h2o]
+    print(f"\n{len(overlap_peak_keys)} common H2O and CO2 peaks found: \n{nu_exp[overlap_peak_keys]}")
 
     if y_bkg is not None and y_peaks is not None:
         y_b_corr = y - y_bkg
         plot_args = [
             {"args": (x, -y_b_corr), "kwargs": {"label": "Baseline-corrected spectrum"}},
-            {"args": (x[matched_peaks], -y_b_corr[matched_peaks], 'gx'),
+            {"args": (x[matched_peaks_co2], -y_b_corr[matched_peaks_co2], 'gx'),
              "kwargs": {"label": "Matched CO2 peaks"}},
             {"args": (x[unmatched_peaks], -y_b_corr[unmatched_peaks], 'rx'),
              "kwargs": {"label": "Unmatched peaks"}},
@@ -309,14 +329,30 @@ def hitran_matching_process(peak_params: List[dict],
              "kwargs": {"label": "Estimated Voigt profiles", "linestyle": "--"}}]
     else:
         plot_args = [{"args": (x, -y), "kwargs": {"label": "Original spectrum"}},
-                     {"args": (x[matched_peaks], -y[matched_peaks], 'gx'),
+                     {"args": (x[matched_peaks_co2], -y[matched_peaks_co2], 'gx'),
                       "kwargs": {"label": "Matched CO2 peaks"}},
                      {"args": (x[unmatched_peaks], -y[unmatched_peaks], 'rx'),
                       "kwargs": {"label": "Unmatched peaks"}}]
+        if y_peaks is not None:
+            plot_args.append({"args": (x, -y_peaks),
+                              "kwargs": {"label": "Estimated Voigt profiles",
+                                         "linestyle": "--"}})
     create_plot(plot_args=plot_args, figure_args={"figsize": (10, 8)},
                 title=f"Region {region}: Spectrum fit with Voigt centres matched "
                       f"against HITRAN with a tolerance of +- {CONFIG.RESOLUTION}",
                 x_label="Wavenumber", y_label="Intensity", legend=True)
+
+    nu_obs = np.array([val[0] for val in match_dict_co2.values()])
+    nu_hit = np.array([val[1] for val in match_dict_co2.values()])
+    plot_args = [{"args": (nu_obs, (nu_obs - nu_hit))}]
+    create_plot(plot_args=plot_args, figure_args={"figsize": (10, 8)},
+                title=f"Region {region}: Nu residual plot with a match tolerance of +- {CONFIG.RESOLUTION}",
+                x_label="Nu observed (Voigt centre)", y_label="Residual", legend=False,
+                scatter=True)
+    print(f"\n mean residual value: \n{np.mean(np.abs(nu_obs - nu_hit))}")
+
+
+
     # plt.show()
     # from sklearn.linear_model import LinearRegression
     # y = [val[1] for val in match_dict.values()]

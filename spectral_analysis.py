@@ -8,7 +8,7 @@ from pathlib import Path
 from scipy.ndimage import gaussian_filter1d
 from typing import Union, Any
 
-from utils import create_plot, StatManager, rmse
+from utils import create_plot, StatManager, rmse, find_statistic_symmetrically
 from config import CONFIG
 import analysing_engine as ae
 import HITRAN
@@ -50,7 +50,7 @@ def get_regions_of_interest(values: npt.NDArray[np.float64],
 
 
 def process_data(df: pd.DataFrame, x_name: str, y_name: str, f_path: Path):
-    window_size, gauss_sigma = 101, 100
+    window_size, gauss_sigma = 201, 100
 
     f_sd_name = f_path.name.replace(".dpt", f"_sd_{window_size}.csv")
     f_sd_dir = f_path.parent / 'sd_files'
@@ -58,9 +58,9 @@ def process_data(df: pd.DataFrame, x_name: str, y_name: str, f_path: Path):
     print(f_sd_dir.parent.is_dir())
     f_sd_path = f_sd_dir / f_sd_name
     if not f_sd_path.is_file():
-        df_stats = StatManager(window_size=window_size)
-        sd_vals = df_stats.find_statistic_symmetrically(df["wavenumber"], df["intensity"],
-                                                        statistic='std')
+        sd_vals = find_statistic_symmetrically(df["wavenumber"], df["intensity"],
+                                               window_size=window_size,
+                                               statistic='std', assume_sorted=True)
         pd.DataFrame(data={x_name: df[x_name], "intensity_sd": sd_vals}).to_csv(f_sd_path,
                                                                                 index=False)
         print(f"Saving rolling standard deviations of {y_name} with a window size of "
@@ -115,22 +115,27 @@ def start_analysis(df: pd.DataFrame, x_name: str, y_name: str, f_path: Path):
             x, peaks, left_bases, right_bases, k_h_params, i
         )
 
-        # b_h_params = dict(**CONFIG.hyper_parameters.BASELINE)
-        # baseline_fit = ae.baseline_estimation_process(x, -y, b_h_params, i)
-        # y_corrected = y + baseline_fit
+        b_h_params = dict(**CONFIG.hyper_parameters.BASELINE)
+        baseline_fit = ae.baseline_estimation_process(x, -y, b_h_params, i)
+        y_corrected = y + baseline_fit
 
-        y_bkg, y_peak, peak_params = ae.curve_and_peak_fitting_process(x, -y, peaks,
-                                                                       left_bases,
-                                                                       right_bases,
-                                                                       knot_vector, False,
-                                                                       i)
-        y_fit = -(y_bkg + y_peak)
-        without_b_corr_error = rmse(y, y_fit)
-        print(f"\nRMSE without prior baseline correction: {without_b_corr_error}")
+        # y_bkg, y_peak, peak_params = ae.curve_and_peak_fitting_process(x, -y, peaks,
+        #                                                                left_bases,
+        #                                                                right_bases,
+        #                                                                knot_vector, False,
+        #                                                                i)
+        # y_fit = -(y_bkg + y_peak)
+        # without_b_corr_error = rmse(y, y_fit)
+        # print(f"\nRMSE without prior baseline correction: {without_b_corr_error}")
+        # ae.hitran_matching_process(peak_params, x, -y, peaks, i, y_bkg, y_peak)
 
-        # _, y_peak = ae.curve_and_peak_fitting_process(x, -y_corrected, peaks, left_bases,
-        #                                               right_bases, knot_vector, True,
-        #                                               i)
+        _, y_peak, peak_params = ae.curve_and_peak_fitting_process(x, -y_corrected, peaks,
+                                                                   left_bases,
+                                                                   right_bases,
+                                                                   knot_vector, True,
+                                                                   i)
+        ae.hitran_matching_process(peak_params, x, -y_corrected, peaks, i, None, y_peak)
+
         # with_b_corr_error = rmse(y, -(y_peak + baseline_fit))
         # print(f"\nRMSE with prior baseline correction: {with_b_corr_error}")
         # peak_params_2 = []
@@ -148,5 +153,5 @@ def start_analysis(df: pd.DataFrame, x_name: str, y_name: str, f_path: Path):
         #     pickle.dump(peaks, f)
         # temp: pd.DataFrame = regions[i].reset_index(drop=True)
         # temp.to_csv("test.csv", index=False)
-        ae.hitran_matching_process(peak_params, x, -y, peaks, i, y_bkg, y_peak)
+
         break

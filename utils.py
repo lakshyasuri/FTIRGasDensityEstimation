@@ -1,3 +1,5 @@
+import sys
+
 import matplotlib.pyplot as plt
 from typing import List, Dict, Tuple, Union
 import numpy.typing as npt
@@ -10,7 +12,8 @@ from sklearn.preprocessing import SplineTransformer
 def create_plot(plot_args: List[Dict], figure_args: dict = None, legend: bool = False,
                 title: str = "", x_label: str = "", y_label: str = "",
                 vline_args: List[Dict] = None, hline_args: List[Dict] = None,
-                vspan_args: List[Dict] = None, x_lim: Tuple = (), y_lim: Tuple = ()):
+                vspan_args: List[Dict] = None, x_lim: Tuple = (), y_lim: Tuple = (),
+                scatter: bool = False):
     if hline_args is None:
         hline_args = []
     if vline_args is None:
@@ -21,8 +24,12 @@ def create_plot(plot_args: List[Dict], figure_args: dict = None, legend: bool = 
         vspan_args = []
 
     plt.figure(**figure_args)
-    for args in plot_args:
-        plt.plot(*args["args"], **args.get("kwargs", {}))
+    if scatter:
+        for args in plot_args:
+            plt.scatter(*args["args"], **args.get("kwargs", {}))
+    else:
+        for args in plot_args:
+            plt.plot(*args["args"], **args.get("kwargs", {}))
     for h_args in hline_args:
         plt.axhline(*h_args["args"], **h_args.get("kwargs", {}))
     for v_args in vline_args:
@@ -42,34 +49,104 @@ def create_plot(plot_args: List[Dict], figure_args: dict = None, legend: bool = 
     # plt.show()
 
 
+def find_statistic_symmetrically(x: Union[pd.Series, np.ndarray],
+                                 y: Union[pd.Series, np.ndarray], window_size: int,
+                                 statistic: str = "mean", assume_sorted=False):
+    if isinstance(x, pd.Series):
+        x = x.to_numpy()
+    if isinstance(y, pd.Series):
+        y = y.to_numpy()
+
+    if not assume_sorted:
+        sorted_idx = np.argsort(x)
+        x, y = x[sorted_idx], y[sorted_idx]
+
+    local_statistic = []
+    half = window_size // 2
+    n = len(x)
+    dtype = float
+
+    for i in range(n):
+        end = x[i] + half
+        start = x[i] - half
+        left = np.searchsorted(x, start, "left")
+        right = np.searchsorted(x, end, "right")
+        l_half, r_half = np.arange(left, i), np.arange(i + 1, right)
+        l_half_len, r_half_len = len(l_half), len(r_half)
+
+        if i + l_half_len > n - 1:
+            last_till_i = n - i - 1  # exclusive of i
+            local_cluster = np.concatenate((range(-last_till_i - 1, 0),
+                                            range(-(l_half_len - last_till_i), 0),
+                                            l_half))
+        elif i < r_half_len:
+            local_cluster = np.concatenate((range(i + 1),
+                                            range(r_half_len - i),
+                                            r_half))
+        else:
+            l_idx = np.searchsorted(x, start, "left")
+            r_idx = np.searchsorted(x, end, "right")
+            local_cluster = np.arange(l_idx, r_idx)
+
+        y_vals = y[local_cluster]
+        if statistic == 'mean':
+            stat = np.mean(y_vals)
+        elif statistic == 'std':
+            stat = np.std(y_vals)
+        elif statistic == 'min':
+            stat = local_cluster[np.argmin(y_vals)]
+            dtype = int
+        else:
+            raise ValueError(f"Unknown statistic: {statistic}")
+        local_statistic.append(stat)
+    return np.array(local_statistic, dtype=dtype)
+
+
 class StatManager:
     def __init__(self, window_size: int):
-        self.symmetric_indices = []
+        # self.symmetric_indices = []
         self.window_size = window_size
 
     def __find_symmetric_indices(self, x: np.ndarray):
+        symmetric_indices = []
         half = self.window_size // 2
         n = len(x)
 
         for i in range(n):
             end = x[i] + half
             start = x[i] - half
-            l_half = np.where((x >= start) & (x < x[i]))[0]
-            r_half = np.where((x > x[i]) & (x <= end))[0]
+            left = np.searchsorted(x, start, "left")
+            right = np.searchsorted(x, end, "right")
+            # l_half = np.where((x >= start) & (x < x[i]))[0]
+            # r_half = np.where((x > x[i]) & (x <= end))[0]
+            l_half, r_half = np.arange(left, i), np.arange(i + 1, right)
             l_half_len, r_half_len = len(l_half), len(r_half)
+            # l_half_len, r_half_len = i - left, right - i - 1
+            # print(l_half, r_half, l_half_2, r_half_2)
 
             if i + l_half_len > n - 1:
+                print("l_half >")
                 last_till_i = n - i - 1  # exclusive of i
                 local_cluster = np.concatenate((range(-last_till_i - 1, 0),
                                                 range(-(l_half_len - last_till_i), 0),
                                                 l_half))
             elif i < r_half_len:
+                print("i < r_half")
                 local_cluster = np.concatenate((range(i + 1),
                                                 range(r_half_len - i),
                                                 r_half))
             else:
-                local_cluster = np.where((x >= start) & (x <= end))[0]
-            self.symmetric_indices.append(local_cluster)
+                print("neither")
+                l_idx = np.searchsorted(x, start, "left")
+                r_idx = np.searchsorted(x, end, "right")
+                local_cluster = np.arange(l_idx, r_idx)
+                # local_cluster = np.where((x >= start) & (x <= end))[0]
+                # print(local_cluster[0], local_cluster[-1])
+                # print(local_cluster_2[0], local_cluster_2[-1])
+            # self.symmetric_indices.append(local_cluster)
+            symmetric_indices.append(local_cluster)
+            sys.exit()
+        return symmetric_indices
 
     # calculating a statistic for every point using a symmetric window
     def find_statistic_symmetrically(self, x: Union[pd.Series, np.ndarray],
@@ -85,14 +162,15 @@ class StatManager:
             sorted_idx = np.argsort(x)
             x, y = x[sorted_idx], y[sorted_idx]
 
-        if not self.symmetric_indices or override_window is not None:
-            if override_window is not None:
-                self.window_size = override_window
-                self.symmetric_indices = []
-            self.__find_symmetric_indices(x)
+        # if not self.symmetric_indices or override_window is not None:
+        #     if override_window is not None:
+        #         self.window_size = override_window
+        #         self.symmetric_indices = []
+        #     self.__find_symmetric_indices(x)
 
         local_statistic = []
-        for indices in self.symmetric_indices:
+        symmetric_indices = self.__find_symmetric_indices(x)
+        for indices in symmetric_indices:
             y_vals = y[indices]
             dtype = float
 
