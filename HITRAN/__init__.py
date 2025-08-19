@@ -1,6 +1,5 @@
 from hapi import db_begin, fetch
 from pathlib import Path
-from mpl_toolkits.axes_grid1.inset_locator import inset_axes, mark_inset, posi
 
 from config import CONFIG
 
@@ -9,8 +8,6 @@ def fetch_data():
     hitran_dir = Path(CONFIG.HITRAN_DATA_DIR)
     gas_path_1 = hitran_dir / CONFIG.HITRAN_DATA_NAME_1
     gas_path_2 = hitran_dir / CONFIG.HITRAN_DATA_NAME_2
-    print(gas_path_1)
-    print(gas_path_2)
     if not gas_path_1.is_file():
         db_begin(CONFIG.HITRAN_DATA_DIR)
         hitran_dir.mkdir(exist_ok=True)

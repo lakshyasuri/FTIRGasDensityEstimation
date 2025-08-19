@@ -1,6 +1,3 @@
-import json
-import sys
-
 import pandas as pd
 import numpy as np
 import numpy.typing as npt
@@ -8,10 +5,9 @@ from pathlib import Path
 from scipy.ndimage import gaussian_filter1d
 from typing import Union, Any
 
-from utils import create_plot, StatManager, rmse, find_statistic_symmetrically
+from utils import create_plot, find_statistic_symmetrically
 from config import CONFIG
 import analysing_engine as ae
-import HITRAN
 
 
 def get_regions_of_interest(values: npt.NDArray[np.float64],
@@ -42,15 +38,18 @@ def get_regions_of_interest(values: npt.NDArray[np.float64],
     axv_args = [{"args": (x.iloc[val[0]], x.iloc[val[1] - 1]),
                  "kwargs": dict(color='green', alpha=0.4)} for _, val in
                 low_sd_chains.items()]
+    axv_args[0]["kwargs"]["label"] = "Low SD region"
     create_plot(plot_args=[{"args": (x, y)}], figure_args=dict(figsize=(10, 8)),
-                y_label=y_name, x_label=x_name, vspan_args=axv_args,
-                title=f"{filename} with low SD regions highlighted")
+                y_label=rf"${y_name.capitalize()}\ SD\ (a.u.)$",
+                x_label=rf'${x_name.capitalize()}\ (cm^{{-1}})$',
+                vspan_args=axv_args,
+                title=f"{filename} with low SD regions highlighted", legend=True)
 
     return regions
 
 
 def process_data(df: pd.DataFrame, x_name: str, y_name: str, f_path: Path):
-    window_size, gauss_sigma = 201, 100
+    window_size, gauss_sigma = 201, 200
 
     f_sd_name = f_path.name.replace(".dpt", f"_sd_{window_size}.csv")
     f_sd_dir = f_path.parent / 'sd_files'
@@ -85,9 +84,24 @@ def process_data(df: pd.DataFrame, x_name: str, y_name: str, f_path: Path):
                   "kwargs": dict(label="Gauss smoothed SD")}]
     h_line_args = [{"args": (sd_threshold,),
                     "kwargs": dict(color='black', linestyle='--', label='SD threshold')}]
-    create_plot(plot_args=plot_args, figure_args=dict(figsize=(10, 8)), legend=True,
+
+    # inset plot settings and args
+    inset_settings = dict(width="100%", height="100%", loc="upper left",
+                          bbox_to_anchor=(0.15, 0.65, 0.3, 0.3),
+                          bbox_transform=True)
+    inset_df = df[(df[x_name] >= 6840) & (df[x_name] <= 6860)]
+    inset_args = [{"args": (inset_df[x_name], sd_vals[inset_df.index])},
+                  {"args": (inset_df[x_name], smoothed_sd[inset_df.index])}]
+    inset_h_line_args = [{"args": (sd_threshold,),
+                          "kwargs": dict(color='black', linestyle='--')}]
+    create_plot(plot_args=plot_args, figure_args=dict(figsize=(10, 8)),
+                legend={"loc": "upper right"},
                 title=f"Water-vapor concentration: {f_path.name} standard deviation plot",
-                y_label=f"{y_name} SD", x_label=x_name, hline_args=h_line_args)
+                y_label=rf"${y_name.capitalize()}\ SD\ (a.u.)$",
+                x_label=rf'${x_name.capitalize()}\ (cm^{{-1}})$',
+                hline_args=h_line_args)
+    # inset_settings=inset_settings, inset_args=inset_args,
+    # inset_hline_args=inset_h_line_args)
 
     print(sd_threshold)
     return smoothed_sd, sd_threshold
@@ -108,7 +122,7 @@ def start_analysis(df: pd.DataFrame, x_name: str, y_name: str, f_path: Path):
                           PEAK_WLEN=CONFIG.hyper_parameters.PEAK_WLEN,
                           AVG_WINDOW_SIZE=CONFIG.hyper_parameters.AVG_WINDOW_SIZE)
         peaks, left_bases, right_bases = ae.peak_finding_process(x, y, p_h_params, i,
-                                                                 plots=True)
+                                                                 f_path.name, plots=True)
 
         k_h_params = dict(NON_PEAK_KNOTS=CONFIG.hyper_parameters.NON_PEAK_KNOTS)
         knot_vector, non_peak_regions = ae.peak_and_knot_placement_process(

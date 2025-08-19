@@ -3,7 +3,7 @@ from types import SimpleNamespace
 CONFIG = SimpleNamespace(
     hyper_parameters=SimpleNamespace(
         AVG_WINDOW_SIZE=31,
-        PEAK_WLEN=0.3,  # 1, 0.15 (denser)
+        PEAK_WLEN=0.03,  # 1, 0.15 (denser)
         PEAK_PROMINENCE=0.85,  # 0.8
         CLUSTER_MAX_DISTANCE=8,
         CLUSTER_MIN_PEAKS=5,

@@ -8,7 +8,8 @@ from typing import List, Tuple, Any, Union
 from scipy.optimize import minimize
 from pathlib import Path
 
-from utils import find_statistic_symmetrically, create_plot, create_splines_pipeline, loss_function, \
+from utils import find_statistic_symmetrically, create_plot, create_splines_pipeline, \
+    loss_function, \
     jacobian_of_loss, voigt_profile
 from HITRAN import fetch_data
 from config import CONFIG
@@ -30,10 +31,10 @@ def find_peaks_and_filter(x: Union[pd.Series, np.ndarray],
     return filtered_peaks, filtered_p_proms
 
 
-def peak_finding_process(x: Union[pd.Series, np.ndarray],
-                         y: Union[pd.Series, np.ndarray],
+def peak_finding_process(x: pd.Series,
+                         y: pd.Series,
                          hyper_params: dict, n_region: int,
-                         plots: bool = True):
+                         filename: str, plots: bool = True):
     w_len = hyper_params["AVG_WINDOW_SIZE"]
     local_avgs = find_statistic_symmetrically(x, y, w_len, assume_sorted=True)
     peaks, prominences = find_peaks_and_filter(x, y, local_avgs,
@@ -63,18 +64,38 @@ def peak_finding_process(x: Union[pd.Series, np.ndarray],
     if plots:
         plot_args = [{"args": (x, y)}, {"args": (x[peaks], y[peaks], 'x'),
                                         "kwargs": {"label": "Inverted peak"}},
-                     {"args": (x[peaks], prominences, 'x'),
-                      "kwargs": {"label": "Peak prominence"}},
+                     # {"args": (x[peaks], prominences, 'x'),
+                     #  "kwargs": {"label": "Peak prominence"}},
                      {"args": (x, local_avgs),
-                      "kwargs": {"label": f"local avg, wlen: {w_len}"}},
+                      "kwargs": {"label": f"local avg, wlen: {w_len}", "color": "red"}},
                      {"args": (x[left_bases], y[left_bases], 'ro'),
                       "kwargs": {"label": "left end point", "ms": 4}},
                      {"args": (x[right_bases], y[right_bases], 'go'),
                       "kwargs": {"label": "right end point", "ms": 4}}
                      ]
+        # inset plot settings and args
+        inset_settings = dict(width="100%", height="100%", loc="upper left",
+                              bbox_to_anchor=(0.1, 0.65, 0.5, 0.35),
+                              bbox_transform=True)
+        inset_idx = x[(x > 6210) & (x <= 6224)].index
+        inset_left_bases = np.intersect1d(inset_idx, left_bases)
+        inset_right_bases = np.intersect1d(inset_idx, right_bases)
+        inset_peaks = np.intersect1d(inset_idx, peaks)
+
+        inset_args = [{"args": (x[inset_idx], y[inset_idx])},
+                      {"args": (x[inset_peaks], y[inset_peaks], 'x')},
+                      {"args": (x[inset_idx], local_avgs[inset_idx]),
+                       "kwargs": {"color": "red"}},
+                      {"args": (x[inset_left_bases], y[inset_left_bases], 'ro'),
+                       "kwargs": {"ms": 4}},
+                      {"args": (x[inset_right_bases], y[inset_right_bases], 'go'),
+                       "kwargs": {"ms": 4}}]
+
         create_plot(plot_args=plot_args, figure_args=dict(figsize=(10, 8)), legend=True,
-                    title=f"Region {n_region}: prominent peaks", x_label="Wavenumber",
-                    y_label="Intensity")
+                    title=f"Region {n_region}: prominent peaks for {filename}",
+                    x_label=r'$Wavenumber\ (cm^{-1})$',
+                    y_label=r"$Intensity\ (a.u.)$", y_lim=(0.04, 0.115), x_lim=(6070, 6400),
+                    inset_settings=inset_settings, inset_args=inset_args)
     return peaks, left_bases, right_bases
 
 
@@ -315,7 +336,8 @@ def hitran_matching_process(peak_params: List[dict],
           f"tolerance of += {CONFIG.RESOLUTION}: \n{no_matches}")
 
     overlap_peak_keys = [i for i in match_indices_co2 if i in match_indices_h2o]
-    print(f"\n{len(overlap_peak_keys)} common H2O and CO2 peaks found: \n{nu_exp[overlap_peak_keys]}")
+    print(
+        f"\n{len(overlap_peak_keys)} common H2O and CO2 peaks found: \n{nu_exp[overlap_peak_keys]}")
 
     if y_bkg is not None and y_peaks is not None:
         y_b_corr = y - y_bkg
@@ -350,8 +372,6 @@ def hitran_matching_process(peak_params: List[dict],
                 x_label="Nu observed (Voigt centre)", y_label="Residual", legend=False,
                 scatter=True)
     print(f"\n mean residual value: \n{np.mean(np.abs(nu_obs - nu_hit))}")
-
-
 
     # plt.show()
     # from sklearn.linear_model import LinearRegression
