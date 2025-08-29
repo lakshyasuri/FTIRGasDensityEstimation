@@ -3,6 +3,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import time
 
 from spectral_analysis import start_analysis
 from config import CONFIG
@@ -23,6 +24,7 @@ def initialise_process(directory: Path, filename: str = None, plot: bool = True)
     else:
         f_names = [filename]
     print(f_names)
+    start = time.time()
     for f_name in f_names:
         f_path = directory / f_name
         df = pd.read_csv(f_path, names=["wavenumber", "intensity"], sep="\t")
@@ -31,8 +33,11 @@ def initialise_process(directory: Path, filename: str = None, plot: bool = True)
         CONFIG.NU_MIN = df["wavenumber"].iloc[0] - 5
         CONFIG.NU_MAX = df["wavenumber"].iloc[-1] + 5
         start_analysis(df=df, x_name="wavenumber", y_name="intensity", f_path=f_path)
-        if plot:
-            plt.show()
+    end = time.time()
+    print(f"\nTotal time taken by the program: {round(end - start, 3)}")
+    if plot:
+        plt.show()
+
 
 
 if __name__ == "__main__":
