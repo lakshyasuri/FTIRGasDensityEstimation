@@ -1,3 +1,6 @@
+import sys
+
+import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
 import numpy.typing as npt
@@ -6,7 +9,7 @@ from scipy.ndimage import gaussian_filter1d
 from typing import Union, Any
 
 from utils import create_plot, find_statistic_symmetrically, rmse, \
-    molecules_per_cm3_to_ppm, bootstrap_ci_calculation
+    molecules_per_cm3_to_ppm, bootstrap_ci_calculation, update_config
 from config import CONFIG
 import analysing_engine as ae
 
@@ -31,18 +34,17 @@ def get_regions_of_interest(values: npt.NDArray[np.float64],
 
     regions, discarded_regions = [], []
     h_line_args = []
-    baseline_means = []
     for i, value in enumerate(low_sd_chains.values()):
         if len(value) > 1:
-            if np.mean(y[value[0]: value[1]]) < \
-                    CONFIG.hyper_parameters.REGION_THRESHOLD:
-                discarded_regions.append((x[value[0]], x[value[1]]))
-            else:
-                regions.append((value[0], value[1]))
+            print(np.mean(y[value[0]: value[1]]))
+            # if np.mean(y[value[0]: value[1]]) < \
+            #         CONFIG.hyper_parameters.REGION_THRESHOLD:
+            #     discarded_regions.append((x[value[0]], x[value[1]]))
+            # else:
+            regions.append((value[0], value[1]))
             # h_line_args.append({"args": (np.mean(baseline[value[0]: value[1]]),),
             #                     "kwargs": dict(linestyle='--',
             #                                    label=f'Region {i} baseline mean')})
-            baseline_means.append(np.mean(y[value[0]: value[1]]))
 
     print(f"\nDiscarded regions due to close proximity to zero "
           f"intensity: \n{discarded_regions}")
@@ -56,77 +58,86 @@ def get_regions_of_interest(values: npt.NDArray[np.float64],
                 hline_args=[{"args": (CONFIG.hyper_parameters.REGION_THRESHOLD,),
                              "kwargs": {"linestyle": "--", "color": "black",
                                         "label": "Intensity threshold"}}],
-                title=f"{filename} with low SD regions highlighted", legend=True)
+                title=f"{filename} with low SD regions highlighted", legend=True,
+                y_lim=(-4e-5, 4e-5))
     return regions
 
 
-def process_data(df: pd.DataFrame, x_name: str, y_name: str, f_path: Path):
-    window_size, gauss_sigma = 201, 200
+def process_data(df: pd.DataFrame, x_name: str, y_name: str, f_path: Path,
+                 to_discard: list[tuple[int]]):
+    x, y, = [], []
+    for i, (left, right) in enumerate(to_discard):
+        if i != len(to_discard) - 1:
+            y.extend(df[y_name].iloc[right: to_discard[i + 1][0]].values)
+            x.extend(df[x_name].iloc[right: to_discard[i + 1][0]].values)
+        else:
+            y.extend(df[y_name].iloc[right: df.shape[0]].values)
+            x.extend(df[x_name].iloc[right: df.shape[0]].values)
+    x, y = np.array(x), np.array(y)
 
-    f_sd_name = f_path.name.replace(".dpt", f"_sd_{window_size}.csv")
-    f_sd_dir = f_path.parent / 'sd_files'
-    f_sd_dir.mkdir(parents=True, exist_ok=True)
-    f_sd_path = f_sd_dir / f_sd_name
-    if not f_sd_path.is_file():
-        sd_vals = find_statistic_symmetrically(df["wavenumber"], df["intensity"],
-                                               window_size=window_size,
-                                               statistic='std', assume_sorted=True)
-        pd.DataFrame(data={x_name: df[x_name], "intensity_sd": sd_vals}).to_csv(f_sd_path,
-                                                                                index=False)
-        print(f"Saving rolling standard deviations of {y_name} with a window size of "
-              f"{window_size} to path {f_sd_path}")
-    else:
-        print(f"Rolling standard deviations file found. Reading it from {f_sd_path}")
-        sd_vals = pd.read_csv(f_sd_path)["intensity_sd"].to_numpy()
+    y_avg = find_statistic_symmetrically(x, y, window_size=101,
+                                         statistic='mean', assume_sorted=True)
+    y_avg_smooth = gaussian_filter1d(y_avg, sigma=300)
+    y_avg_smooth_scaled = (y_avg_smooth - min(y_avg_smooth)) / (
+            max(y_avg_smooth) - min(y_avg_smooth))
+    y_avg_gradient = np.diff(y_avg_smooth_scaled)
+    window_size = len(x[x <= x[0] + 50])
+    half = window_size // 2
+    y_avg_gradient_padded = np.pad(y_avg_gradient, (half, half), "symmetric")
+    y_gradient_variance = [np.std(y_avg_gradient_padded[i: i + window_size]) for i in
+                           range(len(y_avg_gradient))]
 
-    # sd_threshold = np.median(sd_vals)
-    sd_threshold = np.mean(sd_vals)
-    smoothed_sd = gaussian_filter1d(sd_vals, sigma=gauss_sigma)
+    curr_region, straight_regions = [], []
+    min_length = 5
+    for i in range(len(y_gradient_variance)):
+        if y_gradient_variance[i] < CONFIG.hyper_parameters.ALPHA_COEFF_GRAD_STD:
+            curr_region.append(i)
+        else:
+            if len(curr_region) >= min_length:
+                straight_regions.append((curr_region[0], curr_region[-1] + 1))
+            curr_region = []
+    if len(curr_region) >= min_length:
+        straight_regions.append((curr_region[0], curr_region[-1] + 1))
+    straight_regions_x = [(x[start], x[end - 1]) for start, end in straight_regions]
+    print(f"\nSelecting relatively straight regions from the absorption coefficient "
+          "spectrum after discarding the low intensity regions: "
+          f"\n{[f'{x[left]} to {x[right - 1]}' for left, right in straight_regions]}")
 
-    # plotting the original data
-    # plot_args = [{"args": (df[x_name], df[y_name])}]
-    # create_plot(plot_args=plot_args, figure_args=dict(figsize=(10, 8)),
-    #             title=f"Water-vapor concentration: {f_path.name}", x_label=x_name,
-    #             y_label=y_name)
-
-    # plotting the standard deviation of y values against x
-    plot_args = [{"args": (df[x_name], sd_vals), "kwargs": dict(label="SD")},
-                 {"args": (df[x_name], smoothed_sd),
-                  "kwargs": dict(label="Gauss smoothed SD")}]
-    h_line_args = [{"args": (sd_threshold,),
-                    "kwargs": dict(color='black', linestyle='--', label='SD threshold')}]
-
-    # inset plot settings and args
-    inset_settings = dict(width="100%", height="100%", loc="upper left",
-                          bbox_to_anchor=(0.15, 0.65, 0.3, 0.3),
-                          bbox_transform=True)
-    inset_df = df[(df[x_name] >= 6840) & (df[x_name] <= 6860)]
-    inset_args = [{"args": (inset_df[x_name], sd_vals[inset_df.index])},
-                  {"args": (inset_df[x_name], smoothed_sd[inset_df.index])}]
-    inset_h_line_args = [{"args": (sd_threshold,),
-                          "kwargs": dict(color='black', linestyle='--')}]
-    create_plot(plot_args=plot_args, figure_args=dict(figsize=(10, 8)),
-                legend={"loc": "upper right"},
-                title=f"Water-vapor concentration: {f_path.name} standard deviation plot",
+    axv_args = [{"args": (x[start], x[end - 1]),
+                 "kwargs": dict(color='green', alpha=0.4)} for start, end in
+                straight_regions]
+    axv_args[0]["kwargs"]["label"] = "shortlisted region"
+    plot_args = [
+        {"args": (df[x_name], df[y_name])}
+        # {"args": (df[x_name], y_avg)},
+        # {"args": (x, y_avg_smooth)}
+    ]
+    create_plot(plot_args=plot_args,
+                figure_args=dict(figsize=(10, 8)),
                 y_label=rf"${y_name.capitalize()}\ SD\ (a.u.)$",
                 x_label=rf'${x_name.capitalize()}\ (cm^{{-1}})$',
-                hline_args=h_line_args, inset_settings=inset_settings,
-                inset_args=inset_args, inset_hline_args=inset_h_line_args)
+                vspan_args=axv_args,
+                title=f"{f_path.name} with shortlisted regions highlighted", legend=True,
+                y_lim=(-4e-5, 4e-5)
+                )
+    return straight_regions_x
 
-    print(sd_threshold)
-    print(np.median(sd_vals))
-    return smoothed_sd, sd_threshold
 
+def start_analysis(df: pd.DataFrame, x_name: str, y_name: str, f_path: Path,
+                   compute_baseline: bool, least_squares_fit: bool):
+    # df = df[df[x_name] <= 8000]
+    (alpha,
+     _lambda, discarded_regions) = ae.baseline_estimation_process(df[x_name], -df[y_name],
+                                                                  CONFIG.hyper_parameters.BASELINE,
+                                                                  0, compute_baseline,
+                                                                  file_name=f_path.name)
+    df["absorption"] = alpha
+    y_name = "absorption"
+    if _lambda:
+        CONFIG.hyper_parameters.BASELINE.BEST_LAM = _lambda
+        update_config(CONFIG)
 
-def start_analysis(df: pd.DataFrame, x_name: str, y_name: str, f_path: Path):
-    y_baseline, bspline = ae.baseline_estimation_process(df[x_name], -df[y_name],
-                                                         CONFIG.hyper_parameters.BASELINE,
-                                                         0,
-                                                         file_name=f_path.name)
-    smoothed_sd, sd_threshold = process_data(df, x_name, y_name, f_path)
-    regions = get_regions_of_interest(values=smoothed_sd, threshold=sd_threshold,
-                                      x=df[x_name], y=df[y_name], filename=f_path.name,
-                                      x_name=x_name, y_name=y_name, baseline=-y_baseline)
+    regions = process_data(df, x_name, y_name, f_path, discarded_regions)
 
     raw_peaks, co2_peaks, h2o_peaks = [], [], []
     common_peaks, unassigned_peaks = [], []
@@ -136,41 +147,37 @@ def start_analysis(df: pd.DataFrame, x_name: str, y_name: str, f_path: Path):
 
     for i, (start, end) in enumerate(regions):
         print(F"\n=================== REGION {i} ======================= ")
-        x = df[start: end][x_name].reset_index(drop=True)
-        y = df[start: end][y_name].reset_index(drop=True)
+        left_idx = np.searchsorted(df[x_name], start, "left")
+        right_idx = np.searchsorted(df[x_name], end, "right")
+        x = df[left_idx: right_idx][x_name].reset_index(drop=True)
+        y = df[left_idx: right_idx][y_name].reset_index(drop=True)
         print(f"\nRegion start and end points: {x.iloc[0]} to {x.iloc[-1]}")
-        y_base = y_baseline[start: end]
 
         p_h_params = dict(PEAK_PROMINENCE=CONFIG.hyper_parameters.PEAK_PROMINENCE,
                           PEAK_WLEN=CONFIG.hyper_parameters.PEAK_WLEN,
                           AVG_WINDOW_SIZE=CONFIG.hyper_parameters.AVG_WINDOW_SIZE)
         peaks, left_bases, right_bases = ae.peak_finding_process(x, y, p_h_params,
-                                                                 -y_base,
                                                                  i, f_path.name,
                                                                  plots=True)
         raw_peaks.append(len(peaks))
 
-        k_h_params = dict(NON_PEAK_KNOTS=CONFIG.hyper_parameters.NON_PEAK_KNOTS)
-        knot_vector, non_peak_regions = ae.peak_and_knot_placement_process(
-            x, peaks, left_bases, right_bases, k_h_params, i
-        )
-
-        y_corrected = y + y_base
-        _, y_peak, peak_params = ae.curve_and_peak_fitting_process(x, -y_corrected, peaks,
+        _, y_peak, peak_params = ae.curve_and_peak_fitting_process(x, y, peaks,
                                                                    left_bases,
                                                                    right_bases,
-                                                                   knot_vector, True,
-                                                                   f_path.name, i)
+                                                                   f_path.name, i,
+                                                                   least_squares_fit)
+
         voigt_params.append(len(peak_params) * 4)
-        voigt_fit_rmse = rmse(y_corrected, -y_peak)
+        voigt_fit_rmse = rmse(y, y_peak)
+        print(voigt_fit_rmse)
+        tss = np.sum(np.square(y - np.mean(y)))
+        rss = np.sum(np.square(y - y_peak))
+        print(round(1 - (rss / tss), 4))
         rmse_vals.append(voigt_fit_rmse)
 
         (peak_params, co2_indices, h2o_indices,
          overlap_indices, unmatched_indices) = ae.hitran_matching_process(
-            peak_params, x,
-            -y_corrected, peaks, i,
-            f_path.name,
-            None, y_peak)
+            peak_params, x, y, peaks, i, f_path.name, y_peak)
         co2_peaks.append(len(co2_indices))
         h2o_peaks.append(len(h2o_indices))
         common_peaks.append(len(overlap_indices))
@@ -180,12 +187,12 @@ def start_analysis(df: pd.DataFrame, x_name: str, y_name: str, f_path: Path):
          co2_concs_2, h2o_concs_2) = ae.concentration_estimation_process(peak_params,
                                                                          co2_indices,
                                                                          h2o_indices,
-                                                                         bspline,
-                                                                         x, y)
+                                                                         x, y, peaks)
         co2_concentration.extend(co2_concs)
         h2o_concentration.extend(h2o_concs)
         co2_concentration_2.extend(co2_concs_2)
         h2o_concentration_2.extend(h2o_concs_2)
+        break
 
     print(f"\n=========== FINAL DIAGNOSTICS ================")
     print(f"\nNo. of prominent drops for each region: {raw_peaks}. "
@@ -206,6 +213,8 @@ def start_analysis(df: pd.DataFrame, x_name: str, y_name: str, f_path: Path):
     print("FWHM CO2 mean with confidence intervals: \n", co2_lower, co2_mean, co2_upper)
     print("FWHM H2O mean with confidence intervals: \n", h2o_lower, h2o_mean, h2o_upper)
 
+    print("FWHM method: \n", np.mean(co2_concentration_2),
+          np.mean(h2o_concentration_2))
     print("FWHM method in ppm: \n",
           molecules_per_cm3_to_ppm(np.mean(co2_concentration_2)),
           molecules_per_cm3_to_ppm(np.mean(h2o_concentration_2)))

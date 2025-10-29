@@ -1,3 +1,4 @@
+import json
 import matplotlib.pyplot as plt
 from typing import List, Dict, Tuple, Union
 import numpy.typing as npt
@@ -8,6 +9,7 @@ from scipy.sparse.linalg import spsolve
 from scipy.special import wofz
 from sklearn.preprocessing import SplineTransformer
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
+from types import SimpleNamespace
 
 
 def create_plot(plot_args: List[Dict], figure_args: dict = None,
@@ -128,14 +130,72 @@ def find_statistic_symmetrically(x: Union[pd.Series, np.ndarray],
     return np.array(local_statistic, dtype=dtype)
 
 
+def gauss_and_lorentz_normal(x: npt.NDArray[np.float64], fwhm: float, centre: float):
+    fwhm = max(fwhm, 1e-8)
+    centre_diff_squared = np.square(x - centre)
+    a_gauss = (2 / fwhm) * (np.sqrt(np.log(2) / np.pi))
+    b_gauss = 4 * np.log(2) / (fwhm ** 2)
+    gauss_normal = a_gauss * np.exp(-b_gauss * centre_diff_squared)
+
+    lorentz_normal = (1 / np.pi) * (
+            (fwhm / 2) / (centre_diff_squared + np.square(fwhm / 2)))
+
+    return gauss_normal, lorentz_normal
+
+
+def pseudo_voigt_profile(x: npt.NDArray[np.float64], ratio: float, amplitude: float,
+                         centre: float, fwhm: float):
+    gauss_normal, lorentz_normal = gauss_and_lorentz_normal(x=x, fwhm=fwhm, centre=centre)
+    pseudo_voigt = amplitude * (ratio * gauss_normal + (1 - ratio) * lorentz_normal)
+    return pseudo_voigt
+
+
+def pseudo_voigt_derivates(x: npt.NDArray[np.float64], ratio: float, amplitude: float,
+                           centre: float, fwhm: float):
+    gauss_normal, lorentz_normal = gauss_and_lorentz_normal(x=x, fwhm=fwhm, centre=centre)
+    fwhm = max(fwhm, 1e-8)
+    # dV/d_ratio
+    d_ratio = amplitude * (gauss_normal - lorentz_normal)
+
+    # dV/d_amplitude
+    d_amp = ratio * gauss_normal + (1 - ratio) * lorentz_normal
+
+    # dV/d_centre
+    # d_gauss/d_centre
+    d_guass_centre_partial = (8 * np.log(2) / (fwhm ** 2)) * (x - centre) * gauss_normal
+    # d_lorentz/d_centre
+    d_lorentz_centre_partial = (4 * np.pi * (x - centre) / fwhm) * np.square(
+        lorentz_normal)
+    d_centre = amplitude * (
+            ratio * d_guass_centre_partial + (1 - ratio) * d_lorentz_centre_partial)
+
+    # dV/d_fwhm
+    # d_gauss/d_fwhm
+    t1 = -gauss_normal / fwhm
+    t2 = (8 * np.log(2) / (fwhm ** 2)) * np.square(x - centre) * gauss_normal / fwhm
+    d_gauss_fwhm_partial = t1 + t2
+    # d_lorentz/d_fwhm
+    t3 = lorentz_normal / fwhm
+    t4 = -np.pi * np.square(lorentz_normal)
+    d_lorentz_fwhm_partial = t3 + t4
+    d_fwhm = amplitude * (
+            ratio * d_gauss_fwhm_partial + (1 - ratio) * d_lorentz_fwhm_partial)
+
+    return d_ratio, d_amp, d_centre, d_fwhm
+
+
 def voigt_profile(x: npt.NDArray[np.float64], A: float, mu: float, sigma: float,
                   gamma: float):
+    sigma = max(sigma, 1e-8)
+    gamma = max(gamma, 1e-8)
     z = ((x - mu) + 1J * gamma) / (sigma * np.sqrt(2))
     return (A * wofz(z).real) / (sigma * np.sqrt(2 * np.pi))
 
 
 def voigt_derivatives(x: npt.NDArray[np.float64], A: float, mu: float, sigma: float,
                       gamma: float):
+    sigma = max(sigma, 1e-8)
+    gamma = max(gamma, 1e-8)
     xc = x - mu
     z = (xc + 1J * gamma) / (sigma * np.sqrt(2))
     wofz_out = wofz(z)
@@ -167,58 +227,69 @@ def create_splines_pipeline(knot_vector: npt.NDArray, degree: int = 3,
                              knots=knot_vector)
 
 
-def evaluate_model(beta: npt.NDArray, spline_basis: npt.NDArray, x: npt.NDArray,
-                   n_peaks: int, baseline_corrected: bool):
-    if not baseline_corrected:
-        n_spline_coeffs = spline_basis.shape[1]
-        spline_params = beta[:n_spline_coeffs]
-        y_hat = spline_basis @ spline_params
-    else:
-        n_spline_coeffs = 0
-        y_hat = np.zeros_like(x)
-    peak_params = beta[n_spline_coeffs:].reshape(n_peaks, 4)
+def evaluate_model(beta: npt.NDArray, x: npt.NDArray, n_peaks: int):
+    y_hat = np.zeros_like(x)
+    peak_params = beta.reshape(n_peaks, 4)
 
-    for (A, mu, sigma, gamma) in peak_params:
-        y_hat += voigt_profile(x, A, mu, sigma, gamma)
+    for (ratio, amp, centre, fwhm) in peak_params:
+        y_hat += pseudo_voigt_profile(x=x, ratio=ratio, amplitude=amp, centre=centre,
+                                      fwhm=fwhm)
     return y_hat
 
 
-def loss_function(beta: npt.NDArray, spline_basis: npt.NDArray, x: npt.NDArray,
-                  y: npt.NDArray, n_peaks: int, baseline_corrected: bool):
-    y_hat = evaluate_model(beta, spline_basis, x, n_peaks, baseline_corrected)
+def loss_function(beta: npt.NDArray, x: npt.NDArray, y: npt.NDArray, n_peaks: int):
+    y_hat = evaluate_model(beta, x, n_peaks)
     return np.sum(np.square(y - y_hat))
 
 
-def jacobian_of_loss(beta: npt.NDArray, spline_basis: npt.NDArray, x: npt.NDArray,
-                     y: npt.NDArray, n_peaks: int, baseline_corrected: bool):
-    y_hat = evaluate_model(beta, spline_basis, x, n_peaks, baseline_corrected)
+def loss_function_vector(beta: npt.NDArray, x: npt.NDArray, y: npt.NDArray, n_peaks: int):
+    return y - evaluate_model(beta, x, n_peaks)
+
+
+def jacobian_of_loss(beta: npt.NDArray, x: npt.NDArray, y: npt.NDArray, n_peaks: int):
+    y_hat = evaluate_model(beta, x, n_peaks)
     residuals = y - y_hat
     gradient = np.zeros_like(beta)
 
-    # spline gradients
-    if not baseline_corrected:
-        n_spline_coeffs = spline_basis.shape[1]
-        gradient[:n_spline_coeffs] = -2 * (spline_basis.T @ residuals)
-    else:
-        n_spline_coeffs = 0
-
     # peak gradients
-    peak_params = beta[n_spline_coeffs:].reshape(n_peaks, 4)
+    peak_params = beta.reshape(n_peaks, 4)
     jacobian_peak = []  # final J_voigt shape -> (n, 4*n_peaks)
-    for i, (A, mu, sigma, gamma) in enumerate(peak_params):
-        idx = n_spline_coeffs + i * 4
-        dA, dmu, dsigma, dgamma = voigt_derivatives(x, A, mu, sigma, gamma)
+    for i, (ratio, amp, centre, fwhm) in enumerate(peak_params):
+        idx = i * 4
+        d_ratio, d_amp, d_centre, d_fwhm = pseudo_voigt_derivates(x=x, ratio=ratio,
+                                                                  amplitude=amp,
+                                                                  centre=centre,
+                                                                  fwhm=fwhm)
         # jacobian_peak.append(np.column_stack([dA, dmu, dsigma, dgamma]))
-        gradient[idx] = -2 * np.sum(residuals * dA)
-        gradient[idx + 1] = -2 * np.sum(residuals * dmu)
-        gradient[idx + 2] = -2 * np.sum(residuals * dsigma)
-        gradient[idx + 3] = -2 * np.sum(residuals * dgamma)
+        gradient[idx] = -2 * np.sum(residuals * d_ratio)
+        gradient[idx + 1] = -2 * np.sum(residuals * d_amp)
+        gradient[idx + 2] = -2 * np.sum(residuals * d_centre)
+        gradient[idx + 3] = -2 * np.sum(residuals * d_fwhm)
     # J_voigt = np.concatenate(jacobian_peak, axis=1)
     # gradient[n_spline_coeffs: ] = -2 * (J_voigt.T @ residuals)
     return gradient
 
 
-def rmse(y_obs: npt.NDArray, y_pred: npt.NDArray):
+def jacobian_least_squares(beta: npt.NDArray, x: npt.NDArray, y: npt.NDArray,
+                           n_peaks: int):
+    n_points = len(x)
+    jac = np.zeros((n_points, 4 * n_peaks))
+    peak_params = beta.reshape(n_peaks, 4)
+    for i, (ratio, amp, centre, fwhm) in enumerate(peak_params):
+        idx = i * 4
+        d_ratio, d_amp, d_centre, d_fwhm = pseudo_voigt_derivates(x=x, ratio=ratio,
+                                                                  amplitude=amp,
+                                                                  centre=centre,
+                                                                  fwhm=fwhm)
+        jac[:, idx] = -d_ratio
+        jac[:, idx + 1] = -d_amp
+        jac[:, idx + 2] = -d_centre
+        jac[:, idx + 3] = -d_fwhm
+    return jac
+
+
+def rmse(y_obs: Union[npt.NDArray, pd.Series],
+         y_pred: npt.NDArray):
     return np.sqrt(np.mean((y_obs - y_pred) ** 2))
 
 
@@ -254,3 +325,28 @@ def bootstrap_ci_calculation(values, alpha=0.05, n_boot=1000):
     means = [rng.choice(values, n, replace=True).mean() for _ in range(n_boot)]
     return np.mean(values), np.quantile(means, alpha / 2), np.quantile(means,
                                                                        1 - alpha / 2)
+
+
+def convert_namespace_to_dict(namespace):
+    if isinstance(namespace, SimpleNamespace):
+        return {k: convert_namespace_to_dict(v) for k, v in namespace.__dict__.items()}
+    elif isinstance(namespace, list):
+        return [convert_namespace_to_dict(i) for i in namespace]
+    else:
+        return namespace
+
+
+def update_config(config: SimpleNamespace):
+    with open("config.json", "w") as f:
+        json.dump(convert_namespace_to_dict(config), f, indent=1)
+
+def serialize_json(_object: dict):
+    new_object = {}
+    for key, value in _object.items():
+        new_key = str(key)
+        if isinstance(value, (list, np.ndarray)):
+            new_value = ",".join(value)
+        else:
+            new_value = str(value)
+        new_object[new_key] = new_value
+    return new_object
