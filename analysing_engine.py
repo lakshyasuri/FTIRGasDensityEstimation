@@ -18,7 +18,7 @@ import multiprocessing
 import json
 
 import utils
-from HITRAN import fetch_data, get_regional_mean_strength
+from HITRAN import fetch_data, get_hitran_strength_threshold
 from config import CONFIG
 
 
@@ -84,90 +84,43 @@ def peak_finding_process(x: pd.Series,
     print(f"\nNumber of peaks without bases: {len(to_remove)}\n{peaks[to_remove]}")
     if to_remove:
         peaks = np.delete(peaks, to_remove)
-        prominences = np.delete(prominences, to_remove)
     left_bases = np.array(left_bases, dtype=int)
     right_bases = np.array(right_bases, dtype=int)
 
-    if plots:
-        plot_args = [{"args": (x, y)}, {"args": (x[peaks], y[peaks], 'x'),
-                                        "kwargs": {"label": "Absorption maximum"}},
-                     # {"args": (x[left_bases], y[left_bases], 'ro'),
-                     #  "kwargs": {"label": "left end point", "ms": 4}},
-                     # {"args": (x[right_bases], y[right_bases], 'go'),
-                     #  "kwargs": {"label": "right end point", "ms": 4}}
-                     ]
+    # if plots:
+    # plot_args = [{"args": (x, y)}, {"args": (x[peaks], y[peaks], 'x'),
+    #                                 "kwargs": {"label": "Absorption maximum"}},
+    # {"args": (x[left_bases], y[left_bases], 'ro'),
+    #  "kwargs": {"label": "left end point", "ms": 4}},
+    # {"args": (x[right_bases], y[right_bases], 'go'),
+    #  "kwargs": {"label": "right end point", "ms": 4}}
+    # ]
 
-        # # inset plot settings and args
-        # inset_settings = dict(width="100%", height="100%", loc="upper left",
-        #                       bbox_to_anchor=(0.1, 0.65, 0.5, 0.35),
-        #                       bbox_transform=True)
-        # inset_idx = x[(x > 6210) & (x <= 6224)].index
-        # inset_left_bases = np.intersect1d(inset_idx, left_bases)
-        # inset_right_bases = np.intersect1d(inset_idx, right_bases)
-        # inset_peaks = np.intersect1d(inset_idx, peaks)
-        #
-        # inset_args = [{"args": (x[inset_idx], y[inset_idx])},
-        #               {"args": (x[inset_peaks], y[inset_peaks], 'x')},
-        #               {"args": (x[inset_left_bases], y[inset_left_bases], 'ro'),
-        #                "kwargs": {"ms": 4}},
-        #               {"args": (x[inset_right_bases], y[inset_right_bases], 'go'),
-        #                "kwargs": {"ms": 4}}]
+    # # inset plot settings and args
+    # inset_settings = dict(width="100%", height="100%", loc="upper left",
+    #                       bbox_to_anchor=(0.1, 0.65, 0.5, 0.35),
+    #                       bbox_transform=True)
+    # inset_idx = x[(x > 6210) & (x <= 6224)].index
+    # inset_left_bases = np.intersect1d(inset_idx, left_bases)
+    # inset_right_bases = np.intersect1d(inset_idx, right_bases)
+    # inset_peaks = np.intersect1d(inset_idx, peaks)
+    #
+    # inset_args = [{"args": (x[inset_idx], y[inset_idx])},
+    #               {"args": (x[inset_peaks], y[inset_peaks], 'x')},
+    #               {"args": (x[inset_left_bases], y[inset_left_bases], 'ro'),
+    #                "kwargs": {"ms": 4}},
+    #               {"args": (x[inset_right_bases], y[inset_right_bases], 'go'),
+    #                "kwargs": {"ms": 4}}]
 
-        utils.create_plot(plot_args=plot_args, figure_args=dict(figsize=(10, 8)),
-                          legend=True,
-                          title=f"Region {n_region}: prominent absorption peaks for {filename}",
-                          x_label=r'$Wavenumber\ (cm^{-1})$',
-                          y_label=r"$Absorption Coefficient\ (cm^{-1})$")
-        # y_lim=(None, 0.1),
-        # inset_settings=inset_settings, inset_args=inset_args)
+    # utils.create_plot(plot_args=plot_args, figure_args=dict(figsize=(10, 8)),
+    #                   legend=True,
+    #                   title=f"Region {n_region}: prominent absorption peaks for {filename}",
+    #                   x_label=r'$Wavenumber\ (cm^{-1})$',
+    #                   y_label=r"$Absorption Coefficient\ (cm^{-1})$",
+    #                   y_lim=(-2e-6, None))
+    # y_lim=(None, 0.1),
+    # inset_settings=inset_settings, inset_args=inset_args)
     return peaks, left_bases, right_bases
-
-
-def spectrum_linear_expansion(x: npt.NDArray[float], y: npt.NDArray[float]):
-    N = len(x)
-    omega = N // 20
-    x_omega, y_omega = x[-omega:], y[-omega:]
-    print(len(x_omega))
-    reg = LinearRegression(n_jobs=-1).fit(x_omega[:, np.newaxis], y_omega)
-    y_hat = reg.predict(x_omega[:, np.newaxis])
-    print(reg.coef_)
-
-    extended_len = N // 5
-    diff = x[1] - x[0]
-    end_val = x[-1] + (diff * extended_len)
-    x_extended = np.linspace(start=x[-1], stop=end_val, num=extended_len)
-    y_linear = reg.predict(x_extended[:, np.newaxis])
-
-    # FWHM
-    max_y = max(y)
-    height = max(y) - y_linear[len(y_linear) // 2]
-    gauss_width, gauss_height = (x_extended[-1] - x_extended[0]) / 8, height
-    gauss_centre_1 = x_extended[extended_len // 3]
-    gauss_height_1 = max_y - y_linear[extended_len // 3]
-    gauss_centre_2 = x_extended[2 * extended_len // 3]
-    gauss_height_2 = max_y - y_linear[2 * extended_len // 3]
-    gauss_centre, gauss_sigma = np.mean(x_extended), gauss_width / 2.35482
-    y_gauss_peak_1 = gauss_height_1 * np.exp(
-        -0.5 * ((x_extended - gauss_centre_1) / gauss_sigma) ** 2)
-    y_gauss_peak_2 = gauss_height_2 * np.exp(
-        -0.5 * ((x_extended - gauss_centre_2) / gauss_sigma) ** 2)
-    y_gauss = y_gauss_peak_1 + y_gauss_peak_2
-
-    y_extended = y_linear + y_gauss
-
-    plot_args = [
-        {"args": (np.concatenate([x, x_extended]),
-                  np.concatenate([y, y_extended]))}
-    ]
-    utils.create_plot(
-        plot_args=plot_args,
-        figure_args=dict(figsize=(10, 8)),
-        title="Original Spectrum with Linear Regression at the End",
-        x_label=r'$Wavenumber\ (cm^{-1})$',
-        y_label=r"$Intensity\ (a.u.)$"
-    )
-
-    return x_extended, y_linear, y_gauss
 
 
 def get_low_standard_deviation_regions(x: Union[pd.Series, npt.NDArray[float]],
@@ -232,7 +185,6 @@ def baseline_r_12_metric_calculation(x: npt.NDArray[float],
     prominences = peak_prominences(-y_normalized, minima_idx)[0]
     peak_thresh = np.quantile(prominences, 0.5)
     filtered_minima_idx = minima_idx[np.where(prominences >= peak_thresh)[0]]
-    # print(len(filtered_minima_idx))
 
     y_no_peaks = y_normalized[filtered_minima_idx]
     y_mean = np.mean(y_normalized[normalization_region[0]: normalization_region[1]])
@@ -247,12 +199,6 @@ def baseline_r_12_metric_calculation(x: npt.NDArray[float],
             sum_y_no_peaks * t_penalty / np.log(len(y_no_peaks)))
     m2 = sum_y_peaks / (sum_y_no_peaks * t_penalty + sum_y_peaks)
     r_12 = m1 / m2
-    # return r_12
-
-    # utils.create_plot(plot_args=[{"args": (x, y_normalized)},
-    #                        {"args": (x[filtered_minima_idx],
-    #                                  y_normalized[filtered_minima_idx], 'x')}])
-    # plt.show()
     return r_12
 
 
@@ -272,12 +218,6 @@ def baseline_estimation_process(x: Union[pd.Series, npt.NDArray[float]],
     y_smoothed = savgol_filter(y_positive, window_length=100, polyorder=2)
 
     if compute_baseline or hyper_params.BEST_LAM is None:
-        # x_extended, y_linear, y_peak = spectrum_linear_expansion(x, y_smoothed)
-        # y_extended = y_linear + y_peak
-        # y_full = np.concatenate([y_smoothed, y_extended])
-        # x_full = np.concatenate([x, x_extended])
-        # plot_args = [
-        #     {"args": (x_full, -y_full), "kwargs": dict(label="Original spectrum")}]
         file_name = file_name.replace(".dpt", f"_intensity_rolling_sd.csv")
         y_sd, low_sd_regions, _ = get_low_standard_deviation_regions(x, -y, file_name)
         good_regions, discarded_regions = low_intensity_filtering(-y, low_sd_regions,
@@ -303,7 +243,6 @@ def baseline_estimation_process(x: Union[pd.Series, npt.NDArray[float]],
         print(f"\nComputing a new baseline. Smoothness (lambda) parameter values: "
               f"\n{lambda_vals}")
         rmse_vals, baseline_fits = {}, {}
-        # extended_length = len(x_extended)
 
         with multiprocessing.Pool(processes=8) as pool:
             results = pool.map(baseline_wrapper,
@@ -315,12 +254,8 @@ def baseline_estimation_process(x: Union[pd.Series, npt.NDArray[float]],
             if result is not None:
                 lam = lambda_vals[i]
                 baseline_fits[lam] = result
-                # baseline_extended = result[-extended_length:]
                 rmse_vals[lam] = baseline_r_12_metric_calculation(x, y_smoothed, result,
                                                                   normalization_region)
-                # rmse_vals[lam] = rmse(y_obs=y_linear, y_pred=baseline_extended)
-                # plot_args.append({"args": (x_full, -result),
-                #                   "kwargs": {"label": rf"$\lambda$={lam}"}})
                 plot_args.append({"args": (x, -(result - offset)),
                                   "kwargs": {"label": rf"$\lambda$={lam}"}})
 
@@ -328,7 +263,6 @@ def baseline_estimation_process(x: Union[pd.Series, npt.NDArray[float]],
         print(f"\nR\u00b9\u00b2 metric values for candidate lambdas: "
               f"\n{json.dumps(utils.serialize_json(rmse_vals), indent=1)}")
         print(f"Optimal lambda value: {min_rmse_lam}")
-        # best_baseline = baseline_fits[min_rmse_lam][: len(y)]
         best_baseline = baseline_fits[min_rmse_lam]
         best_baseline = best_baseline - offset
     else:
@@ -418,22 +352,29 @@ def curve_and_peak_fitting_process(x: Union[pd.Series, np.ndarray],
         l_idx = np.searchsorted(x, mu0_min, "left")
         r_idx = np.searchsorted(x, mu0_max, "right")
         x_local, y_local = x[l_idx: r_idx], y[l_idx: r_idx]
-        # area_max = y[peaks[i]]
         area_max = 1
-
-        # bounds.extend([(1e-11, None), (mu0_min, mu0_max), (1e-5, 1), (1e-5, 1)])
-        bounds.extend([(0, 1), (1e-11, area_max), (mu0_min, mu0_max), (1e-8, 1)])
-
         if least_sqaures_fit:
-            min_result = least_squares(
-                fun=utils.loss_function_vector, jac=utils.jacobian_least_squares,
-                x0=peak_params[-1], args=(x_local, y_local, 1), ftol=1e-15, xtol=1e-15,
-                gtol=1e-15, max_nfev=10000,
-                # bounds=([1e-10, mu0_min, 1e-5, 1e-5],
-                #         [np.inf, mu0_max, 1, 1]),
-                bounds=([0, 1e-15, mu0_min, 1e-8],
-                        [1, area_max, mu0_max, 1])
-            )
+            try:
+                min_result = least_squares(
+                    fun=utils.loss_function_vector, jac=utils.jacobian_least_squares,
+                    x0=peak_params[-1], args=(x_local, y_local, 1), ftol=1e-15,
+                    xtol=1e-15,
+                    gtol=1e-15, max_nfev=10000,
+                    # bounds=([1e-10, mu0_min, 1e-5, 1e-5],
+                    #         [np.inf, mu0_max, 1, 1]),
+                    bounds=([0, 1e-15, mu0_min, 1e-8],
+                            [1, area_max, mu0_max, 1])
+                )
+            except ValueError as e:
+                if "outside of provided bounds" in str(e):
+                    warnings.warn(f"Found an abnormal peak at centre {mu0}. "
+                                  f"Fitting routine threw the error: {str(e)}. "
+                                  f"Ignoring this peak and moving ahead")
+                    voigt_p_list.append({"discard": True, "centre": mu0})
+                    no_fits.append(mu0)
+                    continue
+                else:
+                    raise
         else:
             min_result = minimize(
                 fun=utils.loss_function, jac=utils.jacobian_of_loss, x0=peak_params[-1],
@@ -490,7 +431,7 @@ def curve_and_peak_fitting_process(x: Union[pd.Series, np.ndarray],
                 break
     end_time = time.time()
 
-    print(f"\n{len(no_fits)} drops discarded due to area being 0: "
+    print(f"\n{len(no_fits)} abnormal or peaks with 0 area discarded: "
           f"\n{np.round(no_fits, 3)}")
     print(f"\n{len(noise)} drops discarded due to FWHM < 0.08 or FWHM > 0.25: "
           f"\n{np.round([val[0] for val in noise], 3)}")
@@ -518,13 +459,14 @@ def hitran_matching_process(peak_params: List[dict],
                             peaks: npt.NDArray[int]):
     nu_exp = np.array([v["centre"] for v in peak_params])
     diff = abs(x[peaks] - nu_exp)
-    utils.create_plot(plot_args=[{"args": (x[peaks], diff)}],
-                      title="Voigt fit centre differences against observed wavenumbers",
-                      x_label=r'$Wavenumber\ (cm^{-1})$', y_label='residuals',
-                      scatter=True)
+    # utils.create_plot(plot_args=[{"args": (x[peaks], diff)}],
+    #                   title="Voigt fit centre differences against observed wavenumbers",
+    #                   x_label=r'$Wavenumber\ (cm^{-1})$', y_label='residuals',
+    #                   scatter=True)
 
     nu_hitran_co2, nu_hitran_h2o = fetch_data()
-    mean_h2o_df = get_regional_mean_strength(h2o_df=nu_hitran_h2o)
+    h2o_s_threshold = get_hitran_strength_threshold(df=nu_hitran_h2o, gas_name='h2o')
+    co2_s_threshold = get_hitran_strength_threshold(df=nu_hitran_co2, gas_name='co2')
 
     strong_co2_lines, weak_co2_lines = {}, {}
     strong_h2o_lines, weak_h2o_lines = {}, {}
@@ -532,8 +474,8 @@ def hitran_matching_process(peak_params: List[dict],
     for i, nu in enumerate(nu_exp):
         if peak_params[i]["discard"]:
             continue
-        low = nu - CONFIG.RESOLUTION
-        high = nu + CONFIG.RESOLUTION
+        low = nu - CONFIG.hyper_parameters.HITRAN_CENTRE_THRESHOLD
+        high = nu + CONFIG.hyper_parameters.HITRAN_CENTRE_THRESHOLD
 
         start_idx_co2 = np.searchsorted(nu_hitran_co2["wavenumber"], low, "left")
         end_idx_co2 = np.searchsorted(nu_hitran_co2["wavenumber"], high, "right")
@@ -552,8 +494,15 @@ def hitran_matching_process(peak_params: List[dict],
                 nearest_nu_hitran_co2 = potential_matches_co2["wavenumber"][
                     max_strength_idx_co2]
                 line_strength = potential_matches_co2["strength"][max_strength_idx_co2]
-
-                if line_strength >= CONFIG.HITRAN_CO2_S_THRESHOLD:
+                if isinstance(co2_s_threshold, pd.DataFrame):
+                    region_nu_idx = np.searchsorted(co2_s_threshold["wavenumber"],
+                                                    nearest_nu_hitran_co2, "left") - 1
+                    condition_co2 = (
+                            line_strength >= co2_s_threshold["mean_strength"].iloc[
+                        region_nu_idx])
+                else:
+                    condition_co2 = (line_strength >= co2_s_threshold)
+                if condition_co2:
                     if nu not in strong_co2_lines:
                         strong_line_co2 = True
                         strong_co2_lines[nu] = {"peak_idx": i,
@@ -571,11 +520,17 @@ def hitran_matching_process(peak_params: List[dict],
                 max_strength_idx_h2o = potential_matches_h2o["strength"].idxmax()
                 nearest_nu_hitran_h2o = potential_matches_h2o["wavenumber"][
                     max_strength_idx_h2o]
-                region_nu_idx = np.searchsorted(mean_h2o_df["wavenumber"],
-                                                nearest_nu_hitran_h2o, "left") - 1
-                line_strength = potential_matches_h2o["strength"][max_strength_idx_h2o]
-                if line_strength >= mean_h2o_df["mean_strength"].iloc[region_nu_idx]:
-                    # if line_strength >= CONFIG.HITRAN_H2O_S_THRESHOLD:
+                line_strength = potential_matches_h2o["strength"][
+                    max_strength_idx_h2o]
+                if isinstance(h2o_s_threshold, pd.DataFrame):
+                    region_nu_idx = np.searchsorted(h2o_s_threshold["wavenumber"],
+                                                    nearest_nu_hitran_h2o, "left") - 1
+                    condition_h2o = (
+                            line_strength >= h2o_s_threshold["mean_strength"].iloc[
+                        region_nu_idx])
+                else:
+                    condition_h2o = (line_strength >= h2o_s_threshold)
+                if condition_h2o:
                     if nu not in strong_h2o_lines:
                         strong_line_h2o = True
                         strong_h2o_lines[nu] = {"peak_idx": i,
@@ -621,70 +576,14 @@ def hitran_matching_process(peak_params: List[dict],
     weak_co2_centres = list(weak_co2_lines.keys())
     weak_h2o_centres = list(weak_h2o_lines.keys())
 
-    # indices_co2_strong = list(strong_co2_lines.keys())
-    # indices_h2o_strong = list(strong_h2o_lines.keys())
-    # unmatch_indices = [val for val in no_matches]
-    # unmatched_peaks = peaks[unmatch_indices]
-
-    # strong_co2_lines_keys = sorted(strong_co2_lines, key=strong_co2_lines.get)
-    # for key in strong_co2_lines_keys:
-    #     print(strong_co2_lines[key][0], strong_co2_lines[key][1],
-    #           f"{strong_co2_lines[key][2]:.3e}")
-
-    # print(f"\nStrong CO2 absorption peaks matched with HITRAN's nu values with a "
-    #       f"tolerance of +- {CONFIG.RESOLUTION}: \n{strong_co2_lines}")
-    # print(f"\nStrong H2O absorption peaks matched with HITRAN's nu values with a "
-    #       f"tolerance of +- {CONFIG.RESOLUTION}: \n{strong_h2o_lines}")
-    # print(f"\nWeak CO2 absorption peaks matched with HITRAN's nu values with a "
-    #       f"tolerance of +- {CONFIG.RESOLUTION}: \n{weak_co2_lines}")
-    # print(f"\nWeak H2O absorption peaks matched with HITRAN's nu values with a "
-    #       f"tolerance of +- {CONFIG.RESOLUTION}: \n{weak_h2o_lines}")
-    # print(f"\nUnmatched absorption peaks with a tolerance of "
-    #       f"+= {CONFIG.RESOLUTION}: \n{no_matches}")
-
-    # unique_co2_peaks = peaks[indices_co2_strong]
-    # unique_h2o_peaks = peaks[indices_h2o_strong]
-    # unique_co2_voigt_vals, unique_co2_x_vals = [], []
-    # unique_h2o_voigt_vals, unique_h2o_x_vals = [], []
-    # unique_co2_amp_vals = []
-    # for key in indices_co2_strong:
-    #     params = peak_params[key]
-    #     y_voigt = utils.pseudo_voigt_profile(x=params["centre"], ratio=params["ratio"],
-    #                                          amplitude=params["area"],
-    #                                          centre=params['centre'],
-    #                                          fwhm=params['fwhm'])
-    #     unique_co2_voigt_vals.append(y_voigt)
-    #     unique_co2_amp_vals.append(params['area'])
-    #     unique_co2_x_vals.append(params["centre"])
-    # unique_co2_voigt_vals = np.array(unique_co2_voigt_vals)
-    #
-    # for key in indices_h2o_strong:
-    #     params = peak_params[key]
-    #     y_voigt = utils.pseudo_voigt_profile(x=params["centre"], ratio=params["ratio"],
-    #                                          amplitude=params["area"],
-    #                                          centre=params['centre'],
-    #                                          fwhm=params['fwhm'])
-    #     unique_h2o_voigt_vals.append(y_voigt)
-    #     unique_h2o_x_vals.append(params["centre"])
-    # unique_h2o_voigt_vals = np.array(unique_h2o_voigt_vals)
-
-    # print(f"\n{len(indices_co2_strong)} strong unique CO2 peaks found: "
-    #       f"\n{nu_exp[indices_co2_strong]}")
     print(f"\n{len(weak_co2_centres)} weak CO2 peaks found: "
           f"\n{np.round(weak_co2_centres, 3)}")
-    # print(f"\n{len(indices_h2o_strong)} strong unique H2O peaks found: "
-    #       f"\n{nu_exp[indices_h2o_strong]}")
     print(f"\n{len(weak_h2o_centres)} weak H2O peaks found: "
           f"\n{np.round(weak_h2o_centres, 3)}")
-    # print(f"\n{len(strong_ambiguous)} strong ambiguous H2O and CO2 peaks found: "
-    #       f"\n{nu_exp[strong_ambiguous]}")
     print(f"\n{len(weak_ambiguous)} weak H2O or CO2 (ambiguous) peaks found: "
           f"\n{np.round(list(weak_ambiguous.keys()), 3)}")
     print(f"\n{len(no_matches)} unmatched peaks found: \n{np.round(no_matches, 3)}")
 
-    # nu_obs = np.array([val[0] for val in strong_co2_lines.values()])
-    # nu_hit = np.array([val[1] for val in strong_co2_lines.values()])
-    # print(f"\n mean residual value: \n{np.mean(np.abs(nu_obs - nu_hit))}")
     return strong_co2_lines, strong_h2o_lines
 
 
@@ -706,9 +605,11 @@ def peak_assignment_and_ambiguity_resolution(strong_co2_lines: Dict[float, dict]
                 strong_h2o_lines[centre]["line_strength"] > value["line_strength"]:
             ambiguous_peaks[centre] = value
         else:
-            if concentration_ppm < CONFIG.CO2_PPM_LOWER or \
-                    concentration_ppm > CONFIG.CO2_PPM_UPPER:
-                blended_peaks[centre] = value
+            if hasattr(CONFIG.hyper_parameters, "CO2_PPM_LOWER") and hasattr(
+                    CONFIG.hyper_parameters, "CO2_PPM_UPPER"):
+                if concentration_ppm < CONFIG.hyper_parameters.CO2_PPM_LOWER or \
+                        concentration_ppm > CONFIG.hyper_parameters.CO2_PPM_UPPER:
+                    blended_peaks[centre] = value
         if centre not in blended_peaks and centre not in ambiguous_peaks:
             strong_co2_centres.append(centre)
             co2_concs.append(concentration_ppm)
@@ -753,12 +654,14 @@ def peak_assignment_and_ambiguity_resolution(strong_co2_lines: Dict[float, dict]
           f"\n{np.round(list(blended_peaks), 3)}")
 
     plot_args = [
-        {"args": (x, y), "kwargs": {"label": "Absorption Coefficient"}},
-        {"args": (x_co2_vals, y_co2_vals, 'gx'),
-         "kwargs": {"ms": 8, "label": "CO2 absorption peak"}},
-        {"args": (x_h2o_vals, y_h2o_vals, 'rx'),
-         "kwargs": {"ms": 8, "label": "H2O absorption peak"}}
+        {"args": (x, y), "kwargs": {"label": "Absorption Coefficient"}}
     ]
+    if len(x_co2_vals) != 0:
+        plot_args.append({"args": (x_co2_vals, y_co2_vals, 'gx'),
+                          "kwargs": {"ms": 8, "label": "CO2 absorption peak"}})
+    if len(x_h2o_vals) != 0:
+        plot_args.append({"args": (x_h2o_vals, y_h2o_vals, 'rx'),
+                          "kwargs": {"ms": 8, "label": "H2O absorption peak"}})
 
     discarded_label_added = False
     for i in range(len(x_peaks_plot)):
@@ -775,8 +678,9 @@ def peak_assignment_and_ambiguity_resolution(strong_co2_lines: Dict[float, dict]
 
     utils.create_plot(plot_args=plot_args, figure_args={"figsize": (10, 8)},
                       title=f"Region {region}: Spectrum with Pseudo-Voigt fits and "
-                            f"HITRAN matches with a tolerance of +- {CONFIG.RESOLUTION} "
+                            f"HITRAN matches with a tolerance of +- {CONFIG.hyper_parameters.HITRAN_CENTRE_THRESHOLD} "
                             f"for {filename}",
                       x_label=r'$Wavenumber\ (cm^{-1})$',
-                      y_label=r"$Absorption\ Coefficient\ (cm^{-1})$", legend=True)
+                      y_label=r"$Absorption\ Coefficient\ (cm^{-1})$", legend=True,
+                      y_lim=(-2e-6, None))
     return co2_concs, h2o_concs

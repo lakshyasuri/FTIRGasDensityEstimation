@@ -93,8 +93,6 @@ def start_analysis(df: pd.DataFrame, x_name: str, y_name: str, f_path: Path,
     co2_concentration, h2o_concentration = [], []
 
     for i, (start, end) in enumerate(regions):
-        if i != 0:
-            continue
         print(F"\n=================== REGION {i} ======================= ")
         left_idx = np.searchsorted(df[x_name], start, "left")
         right_idx = np.searchsorted(df[x_name], end, "right")
@@ -133,7 +131,7 @@ def start_analysis(df: pd.DataFrame, x_name: str, y_name: str, f_path: Path,
         co2_concentration.extend(co2_concs)
         h2o_concentration.extend(h2o_concs)
         print(F"\n=================== REGION {i} END ======================= ")
-        break
+        # break
 
     print(f"\n=========== FINAL DIAGNOSTICS ================")
     print(f"\nNo. of initial prominent peaks for each region: {raw_peaks}. "
