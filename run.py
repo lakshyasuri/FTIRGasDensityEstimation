@@ -1,6 +1,5 @@
 from argparse import ArgumentParser
 from pathlib import Path
-import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import time
@@ -12,28 +11,18 @@ from config import CONFIG
 def initialise_process(directory: Path, filename: str = None, plot: bool = True,
                        compute_baseline: bool = False, least_squares: bool = False):
     if not filename:
-        file_list = [x for x in directory.glob("I_40MHz_res*") if x.is_file()]
-        vapour_densities = [
-            int(x.name.split('I_40MHz_res_')[1].replace(".dpt", "").replace("0.", "")) for
-            x in
-            file_list]
-        vapour_densities.sort()
-        file_nums = [vapour_densities[idx] for idx in
-                     np.linspace(0, len(vapour_densities) - 1, 5, dtype=int)]
-        base_name = "I_40MHz_res_0."
-        f_names = [f"{base_name}{file_num}.dpt" for file_num in file_nums]
+        file_list = [x for x in directory.glob("*.dpt") if x.is_file()]
     else:
-        f_names = [filename]
-    print(f_names)
+        file_list = [directory / filename]
     start = time.time()
-    for f_name in f_names:
-        f_path = directory / f_name
-        df = pd.read_csv(f_path, names=["wavenumber", "intensity"], sep="\t")
+    for file in file_list:
+        print(f"\nProcessing file: {file.name}")
+        df = pd.read_csv(file, names=["wavenumber", "intensity"], sep="\t")
         df.columns = ["wavenumber", "intensity"]
         df.sort_values(by="wavenumber", inplace=True)
-        CONFIG.NU_MIN = df["wavenumber"].iloc[0] - 5
-        CONFIG.NU_MAX = 8001
-        start_analysis(df=df, x_name="wavenumber", y_name="intensity", f_path=f_path,
+        CONFIG.NU_MIN = df["wavenumber"].iloc[0] - 1
+        CONFIG.NU_MAX = df["wavenumber"].iloc[-1] + 1
+        start_analysis(df=df, x_name="wavenumber", y_name="intensity", f_path=file,
                        compute_baseline=compute_baseline, least_squares_fit=least_squares)
     end = time.time()
     print(f"\nTotal time taken by the program: {round(end - start, 3)}")

@@ -57,17 +57,17 @@ def fetch_data():
     return co2_data, h2o_data
 
 
-def _calculate_mean_strength(df: pd.DataFrame, quantile: Union[float | str]):
+def _calculate_threshold_based_strength(df: pd.DataFrame, quantile: Union[float | str]):
     data_dict = {"wavenumber": [], "mean_strength": []}
     current, end = 0, len(df["wavenumber"]) - 1
     while current <= end:
         current_value = df["wavenumber"].iloc[current]
         idx = np.searchsorted(df["wavenumber"], current_value + 100, "right")
         sliced_data = df["strength"].iloc[current: idx]
-        if isinstance(quantile, str):
-            # value = np.mean(sliced_data)
-            # value = sliced_data.idxmax()
+        if quantile == 'half_max':
             value = max(sliced_data) / 2
+        elif quantile == "mean":
+            value = np.mean(sliced_data)
         else:
             value = np.quantile(sliced_data, quantile)
         data_dict["wavenumber"].append(current_value)
@@ -76,27 +76,26 @@ def _calculate_mean_strength(df: pd.DataFrame, quantile: Union[float | str]):
     return pd.DataFrame(data_dict)
 
 
-def get_regional_mean_strength(co2_df: pd.DataFrame, h2o_df: pd.DataFrame):
+def get_regional_mean_strength(h2o_df: pd.DataFrame):
     directory = Path(__file__).resolve().parent
     hitran_dir = directory / CONFIG.HITRAN_DATA_DIR
-    quantile_threshold = CONFIG.HITRAN_CO2_S_THRESHOLD
-    co2_path = hitran_dir / f"CO2_{quantile_threshold}_{CONFIG.NU_MIN}_{CONFIG.NU_MAX}.csv"
-    h2o_path = hitran_dir / f"H2O_{quantile_threshold}_{CONFIG.NU_MIN}_{CONFIG.NU_MAX}.csv"
-    quantile_threshold = quantile_threshold
-    if not co2_path.is_file():
-        mean_df_co2 = _calculate_mean_strength(co2_df, quantile_threshold)
-        mean_df_co2.to_csv(co2_path, index=False)
-    else:
-        mean_df_co2 = pd.read_csv(co2_path)
+    intensity_threshold = CONFIG.HITRAN_H2O_S_THRESHOLD
+    h2o_path = hitran_dir / f"H2O_{intensity_threshold}_{CONFIG.NU_MIN}_{CONFIG.NU_MAX}.csv"
+    # if not co2_path.is_file():
+    #     mean_df_co2 = _calculate_mean_strength(co2_df, quantile_threshold)
+    #     mean_df_co2.to_csv(co2_path, index=False)
+    # else:
+    #     mean_df_co2 = pd.read_csv(co2_path)
 
     if not h2o_path.is_file():
-        mean_df_h2o = _calculate_mean_strength(h2o_df, quantile_threshold)
+        mean_df_h2o = _calculate_threshold_based_strength(h2o_df, intensity_threshold)
         mean_df_h2o.to_csv(h2o_path, index=False)
     else:
         mean_df_h2o = pd.read_csv(h2o_path)
 
-    return mean_df_co2, mean_df_h2o
+    return mean_df_h2o
+
 
 if __name__ == "__main__":
     co2_data, h2o_data = fetch_data()
-    get_regional_mean_strength(co2_data, h2o_data)
+    get_regional_mean_strength(h2o_data)

@@ -143,14 +143,16 @@ def gauss_and_lorentz_normal(x: npt.NDArray[np.float64], fwhm: float, centre: fl
     return gauss_normal, lorentz_normal
 
 
-def pseudo_voigt_profile(x: npt.NDArray[np.float64], ratio: float, amplitude: float,
+def pseudo_voigt_profile(x: Union[npt.NDArray[np.float64], float], ratio: float,
+                         amplitude: float,
                          centre: float, fwhm: float):
     gauss_normal, lorentz_normal = gauss_and_lorentz_normal(x=x, fwhm=fwhm, centre=centre)
     pseudo_voigt = amplitude * (ratio * gauss_normal + (1 - ratio) * lorentz_normal)
     return pseudo_voigt
 
 
-def pseudo_voigt_derivates(x: npt.NDArray[np.float64], ratio: float, amplitude: float,
+def pseudo_voigt_derivates(x: Union[npt.NDArray[np.float64], float], ratio: float,
+                           amplitude: float,
                            centre: float, fwhm: float):
     gauss_normal, lorentz_normal = gauss_and_lorentz_normal(x=x, fwhm=fwhm, centre=centre)
     fwhm = max(fwhm, 1e-8)
@@ -339,6 +341,7 @@ def convert_namespace_to_dict(namespace):
 def update_config(config: SimpleNamespace):
     with open("config.json", "w") as f:
         json.dump(convert_namespace_to_dict(config), f, indent=1)
+
 
 def serialize_json(_object: dict):
     new_object = {}

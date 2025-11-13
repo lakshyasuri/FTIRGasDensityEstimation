@@ -1,40 +1,22 @@
 {
- "hyper_parameters": {
-  "AVG_WINDOW_SIZE": 31,
-  "PEAK_WLEN": 0.1,
-  "PEAK_PROMINENCE": 0.6,
-  "CLUSTER_MAX_DISTANCE": 8,
-  "CLUSTER_MIN_PEAKS": 5,
-  "NON_PEAK_KNOTS": 50,
-  "MIN_KNOT_SPACING": 1,
-  "ALPHA_COEFF_GRAD_STD": 5e-06,
-  "TAU_VALS": [
-   0.05,
-   0.03,
-   0.02,
-   0.015,
-   0.01,
-   0.005,
-   0.003,
-   0.002,
-   0.001
-  ],
-  "BASELINE": {
-   "REGION_THRESHOLD": 0.015,
-   "LAM": [
-    3000
-   ],
-   "BEST_LAM_new": 126896100316792.34,
-   "BEST_LAM": 78804628156699.05,
-   "TOL": 0.057
-  }
- },
- "RESOLUTION": 0.2,
- "HITRAN_DATA_DIR": "HITRAN_data",
- "HITRAN_DATA_NAME_1": "CO2.data",
- "HITRAN_DATA_NAME_2": "H2O.data",
- "HITRAN_CO2_S_THRESHOLD": "mean",
- "HITRAN_H2O_S_THRESHOLD": "mean",
- "NU_MIN": 5794.99365,
- "NU_MAX": 8001
+  "hyper_parameters": {
+    "PEAK_WLEN": 0.1,
+    "PEAK_PROMINENCE": 0.6,
+    "ALPHA_COEFF_GRAD_STD": 2e-05,
+    "BASELINE": {
+      "REGION_THRESHOLD": 0.015,
+      "BEST_LAM_new": 126896100316792.34,
+      "BEST_LAM": 78804628156699.05
+    }
+  },
+  "RESOLUTION": 0.175,
+  "HITRAN_DATA_DIR": "HITRAN_data",
+  "HITRAN_DATA_NAME_1": "CO2.data",
+  "HITRAN_DATA_NAME_2": "H2O.data",
+  "HITRAN_CO2_S_THRESHOLD": 0.2e-23,
+  "HITRAN_H2O_S_THRESHOLD": "mean",
+  "NU_MIN": 5794.99365,
+  "NU_MAX": 8001,
+  "CO2_PPM_LOWER": 320,
+  "CO2_PPM_UPPER": 450
 }
