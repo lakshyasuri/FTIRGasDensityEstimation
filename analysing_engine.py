@@ -1,10 +1,7 @@
-import sys
 from types import SimpleNamespace
-import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
 from pybaselines.utils import ParameterWarning
-from sklearn.linear_model import LinearRegression
 from scipy.ndimage import gaussian_filter1d
 from scipy.signal import find_peaks, peak_prominences, savgol_filter
 from pybaselines import Baseline
@@ -318,9 +315,6 @@ def curve_and_peak_fitting_process(x: Union[pd.Series, np.ndarray],
     if isinstance(y, pd.Series):
         y = y.to_numpy()
 
-    bounds: List[Tuple[Any, Any]] = []
-
-    # setting bounds for faster convergence
     peak_params, optimal_params = [], []
     multiplier = 2 * np.sqrt(2 * np.log(2))
     rmse_vals = []
@@ -403,7 +397,8 @@ def curve_and_peak_fitting_process(x: Union[pd.Series, np.ndarray],
         if min_result.x[1] == 0:
             v_params["discard"] = True
             no_fits.append(min_result.x[2])
-        elif min_result.x[3] < 0.08 or min_result.x[3] > 0.27:
+        elif (min_result.x[3] < CONFIG.hyper_parameters.FWHM_MIN or
+              min_result.x[3] > CONFIG.hyper_parameters.FWHM_MAX):
             v_params["discard"] = True
             noise.append((min_result.x[2], float(min_result.x[3])))
         if min_result.x[2] in fitted_centres:
@@ -411,7 +406,6 @@ def curve_and_peak_fitting_process(x: Union[pd.Series, np.ndarray],
             duplicates.append(min_result.x[2])
         voigt_p_list.append(v_params)
 
-        # if not v_params['discard']:
         x_peaks_plot.append(x_eval)
         y_peaks_plot.append(y_hat)
         plot_dict = {"args": (x_eval, y_hat),
@@ -458,7 +452,7 @@ def hitran_matching_process(peak_params: List[dict],
                             x: Union[pd.Series, npt.NDArray[float]],
                             peaks: npt.NDArray[int]):
     nu_exp = np.array([v["centre"] for v in peak_params])
-    diff = abs(x[peaks] - nu_exp)
+    # diff = abs(x[peaks] - nu_exp)
     # utils.create_plot(plot_args=[{"args": (x[peaks], diff)}],
     #                   title="Voigt fit centre differences against observed wavenumbers",
     #                   x_label=r'$Wavenumber\ (cm^{-1})$', y_label='residuals',
@@ -583,7 +577,6 @@ def hitran_matching_process(peak_params: List[dict],
     print(f"\n{len(weak_ambiguous)} weak H2O or CO2 (ambiguous) peaks found: "
           f"\n{np.round(list(weak_ambiguous.keys()), 3)}")
     print(f"\n{len(no_matches)} unmatched peaks found: \n{np.round(no_matches, 3)}")
-
     return strong_co2_lines, strong_h2o_lines
 
 
@@ -658,10 +651,10 @@ def peak_assignment_and_ambiguity_resolution(strong_co2_lines: Dict[float, dict]
     ]
     if len(x_co2_vals) != 0:
         plot_args.append({"args": (x_co2_vals, y_co2_vals, 'gx'),
-                          "kwargs": {"ms": 8, "label": "CO2 absorption peak"}})
+                          "kwargs": {"ms": 9, "label": "CO2 absorption peak"}})
     if len(x_h2o_vals) != 0:
         plot_args.append({"args": (x_h2o_vals, y_h2o_vals, 'rx'),
-                          "kwargs": {"ms": 8, "label": "H2O absorption peak"}})
+                          "kwargs": {"ms": 9, "label": "H2O absorption peak"}})
 
     discarded_label_added = False
     for i in range(len(x_peaks_plot)):

@@ -1,11 +1,7 @@
-import sys
-import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
-import numpy.typing as npt
 from pathlib import Path
 from scipy.ndimage import gaussian_filter1d
-from typing import Union, Any
 
 import utils
 from config import CONFIG
@@ -131,7 +127,6 @@ def start_analysis(df: pd.DataFrame, x_name: str, y_name: str, f_path: Path,
         co2_concentration.extend(co2_concs)
         h2o_concentration.extend(h2o_concs)
         print(F"\n=================== REGION {i} END ======================= ")
-        # break
 
     print(f"\n=========== FINAL DIAGNOSTICS ================")
     print(f"\nNo. of initial prominent peaks for each region: {raw_peaks}. "
