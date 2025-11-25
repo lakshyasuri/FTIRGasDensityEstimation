@@ -2,7 +2,7 @@ import pandas as pd
 from hapi import db_begin, fetch
 from pathlib import Path
 import numpy as np
-from typing import Union, Literal
+from typing import Literal
 
 from config import CONFIG
 

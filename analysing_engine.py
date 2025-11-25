@@ -41,31 +41,26 @@ def baseline_wrapper(kwargs):
 
 
 def find_peaks_and_filter(x: Union[pd.Series, np.ndarray],
-                          y: Union[pd.Series, np.ndarray],
-                          window_len, peak_threshold):
+                          y: Union[pd.Series, np.ndarray], window_len: float,
+                          peak_threshold: float):
     """Find peaks and filter. Prominence based on the height of peaks"""
     wlen = len(x[x <= x[0] + window_len])
     peaks, _ = find_peaks(y, distance=wlen)
     prominences = y[peaks]
     prominences = prominences.to_numpy() if isinstance(prominences,
                                                        pd.Series) else prominences
-    peak_thresh = np.quantile(prominences, peak_threshold)
-    filtered_p_idx = np.where(prominences >= peak_thresh)[0]
+    filtered_p_idx = np.where(prominences >= peak_threshold)[0]
     filtered_peaks = peaks[filtered_p_idx]
     filtered_peaks.sort()
-    filtered_p_proms = prominences[filtered_p_idx]
-    return filtered_peaks, filtered_p_proms
+    return filtered_peaks
 
 
-def peak_finding_process(x: pd.Series,
-                         y: pd.Series,
-                         hyper_params: dict, n_region: int,
+def peak_finding_process(x: pd.Series, y: pd.Series, window_len: float,
+                         peak_threshold: float, n_region: int,
                          filename: str, plots: bool = True):
-    peaks, prominences = find_peaks_and_filter(x, y,
-                                               hyper_params["PEAK_WLEN"],
-                                               hyper_params["PEAK_PROMINENCE"])
-    print(
-        f"\nNumber of prominent peaks - {len(peaks)}; {round(len(peaks) / len(x) * 100, 2)} %")
+    peaks = find_peaks_and_filter(x, y, window_len, peak_threshold)
+    print(f"\nNumber of prominent peaks - "
+          f"{len(peaks)}; {round(len(peaks) / len(x) * 100, 2)} %")
 
     left_bases, right_bases, to_remove = [], [], []
     dy = np.gradient(y)
@@ -201,8 +196,7 @@ def baseline_r_12_metric_calculation(x: npt.NDArray[float],
 
 def baseline_estimation_process(x: Union[pd.Series, npt.NDArray[float]],
                                 y: Union[pd.Series, npt.NDArray[float]],
-                                hyper_params: SimpleNamespace,
-                                n_region: int, compute_baseline: bool,
+                                hyper_params: SimpleNamespace, compute_baseline: bool,
                                 file_name: str = None):
     if isinstance(x, pd.Series):
         x = x.to_numpy()
@@ -283,7 +277,8 @@ def baseline_estimation_process(x: Union[pd.Series, npt.NDArray[float]],
                       title=f"Baseline estimation for humidity level: {file_name}",
                       x_label=r'$Wavenumber\ (cm^{-1})$', y_label=r"$Intensity\ (a.u.)$")
 
-    alpha = ((best_baseline / y) - 1) * (1 - 0.999) / 400
+    alpha = ((best_baseline / y) - 1) * (
+            1 - hyper_params.REFLECTIVITY) / hyper_params.PATH_LENGTH
 
     curr_region, low_intensity_regions = [], []
     for i in range(len(best_baseline)):
@@ -307,8 +302,7 @@ def curve_and_peak_fitting_process(x: Union[pd.Series, np.ndarray],
                                    peaks: npt.NDArray[np.int64],
                                    left_bases: npt.NDArray[np.int64],
                                    right_bases: npt.NDArray[np.int64],
-                                   filename: str, n_region: int,
-                                   least_sqaures_fit: bool):
+                                   lbfgs_fit: bool):
     start_time = time.time()
     if isinstance(x, pd.Series):
         x = x.to_numpy()
@@ -336,9 +330,7 @@ def curve_and_peak_fitting_process(x: Union[pd.Series, np.ndarray],
         mu0 = x[peaks[i]]
         sigma0 = (x[right_bases[i]] - x[left_bases[i]]) / 6
         fwhm0 = sigma0 * multiplier
-        # gamma0 = sigma0
         ratio0 = 0.5
-        # peak_params.append([A0, mu0, sigma0, gamma0])
         peak_params.append([ratio0, A0, mu0, fwhm0])
 
         mu0_min = x[left_bases[i]]
@@ -347,15 +339,13 @@ def curve_and_peak_fitting_process(x: Union[pd.Series, np.ndarray],
         r_idx = np.searchsorted(x, mu0_max, "right")
         x_local, y_local = x[l_idx: r_idx], y[l_idx: r_idx]
         area_max = 1
-        if least_sqaures_fit:
+        if not lbfgs_fit:
             try:
                 min_result = least_squares(
                     fun=utils.loss_function_vector, jac=utils.jacobian_least_squares,
                     x0=peak_params[-1], args=(x_local, y_local, 1), ftol=1e-15,
                     xtol=1e-15,
                     gtol=1e-15, max_nfev=10000,
-                    # bounds=([1e-10, mu0_min, 1e-5, 1e-5],
-                    #         [np.inf, mu0_max, 1, 1]),
                     bounds=([0, 1e-15, mu0_min, 1e-8],
                             [1, area_max, mu0_max, 1])
                 )
@@ -373,8 +363,6 @@ def curve_and_peak_fitting_process(x: Union[pd.Series, np.ndarray],
             min_result = minimize(
                 fun=utils.loss_function, jac=utils.jacobian_of_loss, x0=peak_params[-1],
                 args=(x_local, y_local, 1), method='L-BFGS-B',
-                # bounds=[(1e-10, None), (x[left_bases[i]], x[right_bases[i]]), (1e-8, 1),
-                #         (1e-8, 1)],
                 bounds=[(0, 1), (1e-15, area_max), (mu0_min, mu0_max), (1e-8, 1)],
                 options={'maxiter': 10000, 'ftol': 1e-15, 'disp': True,
                          'gtol': 1e-15}
@@ -427,36 +415,27 @@ def curve_and_peak_fitting_process(x: Union[pd.Series, np.ndarray],
 
     print(f"\n{len(no_fits)} abnormal or peaks with 0 area discarded: "
           f"\n{np.round(no_fits, 3)}")
-    print(f"\n{len(noise)} drops discarded due to FWHM < 0.08 or FWHM > 0.25: "
+    print(f"\n{len(noise)} drops discarded due to FWHM < "
+          f"{CONFIG.hyper_parameters.FWHM_MIN} or FWHM > "
+          f"{CONFIG.hyper_parameters.FWHM_MAX}: "
           f"\n{np.round([val[0] for val in noise], 3)}")
     print(f"\n{len(duplicates)} drops discarded due duplicate fit: "
           f"\n{np.round(duplicates, 3)}")
 
     print(f"total time taken for fitting {round(end_time - start_time, 3)} seconds")
-
-    # utils.create_plot(plot_args=plot_args, figure_args=dict(figsize=(10, 8)), legend=True,
-    #                   title=f"Region {n_region}: Voigt profiles fit for {filename}",
-    #                   x_label=r'$Wavenumber\ (cm^{-1})$',
-    #                   y_label=r"$Absorption\ (cm^{-1})$")
-    # utils.create_plot(plot_args=[{"args": (x[peaks], rmse_vals)}], scatter=True)
     return x_peaks_plot, y_peaks_plot, voigt_p_list, sum(rmse_vals)
-
-
-def get_full_width_at_half_max(sigma: float, gamma: float):
-    fwhm_gauss = 2 * sigma * np.sqrt(2 * np.log(2))
-    fwhm_loren = 2 * gamma
-    return (0.5343 * fwhm_loren) + np.sqrt(0.2169 * fwhm_loren ** 2 + fwhm_gauss ** 2)
 
 
 def hitran_matching_process(peak_params: List[dict],
                             x: Union[pd.Series, npt.NDArray[float]],
-                            peaks: npt.NDArray[int]):
+                            peaks: npt.NDArray[int], region: int, filename: str):
     nu_exp = np.array([v["centre"] for v in peak_params])
-    # diff = abs(x[peaks] - nu_exp)
-    # utils.create_plot(plot_args=[{"args": (x[peaks], diff)}],
-    #                   title="Voigt fit centre differences against observed wavenumbers",
-    #                   x_label=r'$Wavenumber\ (cm^{-1})$', y_label='residuals',
-    #                   scatter=True)
+    diff = abs(x[peaks] - nu_exp)
+    utils.create_plot(plot_args=[{"args": (x[peaks], diff)}],
+                      title=f"Region {region}: Pseudo-Voigt fit centre differences "
+                            f"against observed wavenumbers for {filename} file",
+                      x_label=r'$Wavenumber\ (cm^{-1})$', y_label='residuals',
+                      scatter=True)
 
     nu_hitran_co2, nu_hitran_h2o = fetch_data()
     h2o_s_threshold = get_hitran_strength_threshold(df=nu_hitran_h2o, gas_name='h2o')
@@ -537,124 +516,213 @@ def hitran_matching_process(peak_params: List[dict],
                                           "line_strength": line_strength}
             if not potential_matches_h2o.empty and not potential_matches_co2.empty:
                 if strong_line_co2 and strong_line_h2o:
-                    # print(
-                    #     f"Strong ambiguous - CO2: {nu} {strong_co2_lines[nu]["line_strength"]} "
-                    #     f"{(peak_params[i]['area'] / strong_co2_lines[nu]["line_strength"]):.3e}, "
-                    #     f"H2O: {nu} {strong_h2o_lines[nu]["line_strength"]}")
                     strong_co2_lines[nu]["ambiguous"] = True
                 elif strong_line_co2:
-                    if weak_h2o_lines[nu]["line_strength"] >= strong_co2_lines[nu][
-                        "line_strength"]:
-                        # print(f"strong co2 val: "
-                        #       f"{strong_co2_lines[nu]["line_strength"]}, {nu}")
-                        # print(f"weak h20 val: "
-                        #       f"{weak_h2o_lines[nu]["line_strength"]}, {nu}")
-                        strong_h2o_lines[nu] = weak_h2o_lines[nu]
-                        strong_co2_lines[nu]["ambiguous"] = True
+                    strong_co2_lines[nu]["ambiguous"] = True
                 elif strong_line_h2o:
-                    if weak_co2_lines[nu]["line_strength"] >= strong_h2o_lines[nu][
-                        "line_strength"]:
-                        # print(f"strong h2o val: {strong_h2o_lines[nu]["line_strength"]}, "
-                        #       f"{nu}")
-                        # print(f"weak co2 val: {weak_co2_lines[nu]["line_strength"]}, "
-                        #       f"{nu}")
-                        strong_h2o_lines[nu]["ambiguous"] = True
+                    strong_h2o_lines[nu]["ambiguous"] = True
                 else:
-                    # print(f"Weak ambiguous - CO2: {nu} "
-                    #       f"{weak_co2_lines[nu]["line_strength"]}, H2O: {nu} "
-                    #       f"{weak_h2o_lines[nu]["line_strength"]}")
-                    weak_ambiguous[nu] = weak_co2_lines[nu]
+                    weak_ambiguous[nu] = {"co2": weak_co2_lines[nu],
+                                          "h2o": weak_h2o_lines[nu]}
                     del weak_co2_lines[nu]
                     del weak_h2o_lines[nu]
 
-    weak_co2_centres = list(weak_co2_lines.keys())
-    weak_h2o_centres = list(weak_h2o_lines.keys())
-
-    print(f"\n{len(weak_co2_centres)} weak CO2 peaks found: "
-          f"\n{np.round(weak_co2_centres, 3)}")
-    print(f"\n{len(weak_h2o_centres)} weak H2O peaks found: "
-          f"\n{np.round(weak_h2o_centres, 3)}")
-    print(f"\n{len(weak_ambiguous)} weak H2O or CO2 (ambiguous) peaks found: "
-          f"\n{np.round(list(weak_ambiguous.keys()), 3)}")
     print(f"\n{len(no_matches)} unmatched peaks found: \n{np.round(no_matches, 3)}")
-    return strong_co2_lines, strong_h2o_lines
+    return strong_co2_lines, strong_h2o_lines, weak_co2_lines, weak_h2o_lines, weak_ambiguous
 
 
 def peak_assignment_and_ambiguity_resolution(strong_co2_lines: Dict[float, dict],
                                              strong_h2o_lines: Dict[float, dict],
-                                             peak_params: List[dict], x: pd.Series,
-                                             y: pd.Series, x_peaks_plot: list,
-                                             y_peaks_plot: list, region: int,
-                                             filename: str):
-    ambiguous_peaks, blended_peaks = {}, {}
+                                             weak_co2_lines: Dict[float, dict],
+                                             weak_h2o_lines: Dict[float, dict],
+                                             weak_ambiguous: Dict[float, dict],
+                                             peak_params: List[dict], peaks: list[int],
+                                             x: pd.Series, y: pd.Series,
+                                             x_peaks_plot: list, y_peaks_plot: list,
+                                             region: int, filename: str):
+    resolution_helper = False
+    if ((hasattr(CONFIG.hyper_parameters, "CO2_PPM_LOWER") and hasattr(
+            CONFIG.hyper_parameters, "CO2_PPM_UPPER")) and
+            (CONFIG.hyper_parameters.CO2_PPM_LOWER is not None and
+             CONFIG.hyper_parameters.CO2_PPM_UPPER is not None)):
+        resolution_helper = True
+
+    best_co2_centres, best_h2o_centres = {}, {}
+    other_co2_centres, other_h2o_centres = {}, {}
+    ambiguous_peaks, noise = {}, {}
     co2_concs, h2o_concs = [], []
-    strong_co2_centres, strong_h2o_centres = [], []
-    x_co2_vals, y_co2_vals = [], []
-    x_h2o_vals, y_h2o_vals = [], []
+    best_co2_x, best_co2_y, best_h2o_x, best_h2o_y = [], [], [], []
+    other_co2_x, other_co2_y, other_h2o_x, other_h2o_y = [], [], [], []
+
     for centre, value in strong_co2_lines.items():
         concentration = peak_params[value["peak_idx"]]["area"] / value["line_strength"]
         concentration_ppm = utils.molecules_per_cm3_to_ppm(concentration)
-        if value.get("ambiguous") and \
-                strong_h2o_lines[centre]["line_strength"] > value["line_strength"]:
-            ambiguous_peaks[centre] = value
+        if value.get("ambiguous"):
+            if resolution_helper:
+                if CONFIG.hyper_parameters.CO2_PPM_LOWER <= concentration_ppm <= \
+                        CONFIG.hyper_parameters.CO2_PPM_UPPER:
+                    best_co2_centres[centre] = value
+                    co2_concs.append(concentration_ppm)
+                    # remove the centre from H2O dicts as it is resolved
+                    if centre in strong_h2o_lines:
+                        del strong_h2o_lines[centre]
+                    elif centre in weak_h2o_lines:
+                        del weak_h2o_lines[centre]
+                else:
+                    # then it's either a strong or a weak water peak.
+                    pass
+            else:
+                # if it's a strong H2O match as well, then we can't resolve it without
+                # some additional criteria
+                if centre in strong_h2o_lines:
+                    # add it to the ambiguous dict and remove it from the H2O dict
+                    ambiguous_peaks[centre] = value
+                    del strong_h2o_lines[centre]
+                elif centre in weak_h2o_lines:
+                    # consider it ambiguous only if the weak h2o line strength >
+                    # strong co2 line strength
+                    if weak_h2o_lines[centre]["line_strength"] > value["line_strength"]:
+                        ambiguous_peaks[centre] = value
+                    else:
+                        # it could potentially be a CO2 peak. Needs analysis. Depends on
+                        # the peak size
+                        p_params = peak_params[value["peak_idx"]]
+                        other_co2_centres[centre] = value
+                        other_co2_y.append(
+                            utils.pseudo_voigt_profile(centre, p_params["ratio"],
+                                                       p_params["area"], centre,
+                                                       p_params['fwhm']))
+                    del weak_h2o_lines[centre]
         else:
-            if hasattr(CONFIG.hyper_parameters, "CO2_PPM_LOWER") and hasattr(
-                    CONFIG.hyper_parameters, "CO2_PPM_UPPER"):
-                if concentration_ppm < CONFIG.hyper_parameters.CO2_PPM_LOWER or \
-                        concentration_ppm > CONFIG.hyper_parameters.CO2_PPM_UPPER:
-                    blended_peaks[centre] = value
-        if centre not in blended_peaks and centre not in ambiguous_peaks:
-            strong_co2_centres.append(centre)
-            co2_concs.append(concentration_ppm)
-            params = peak_params[value["peak_idx"]]
-            x_co2_vals.append(centre)
-            y_co2_vals.append(
-                utils.pseudo_voigt_profile(centre, params['ratio'], params['area'],
-                                           centre, params['fwhm']))
-            print(
-                f"CO2: line_strength: {value['line_strength']:.3e}, "
-                f"Centre: {round(centre, 2)}, "
-                f"Conc.: {concentration:.3e} molecules/cm3, "
-                f"{round(concentration_ppm, 3)} ppm")
+            # not an ambiguous CO2 peak. Need to check for blending or congestion
+            if resolution_helper:
+                if CONFIG.hyper_parameters.CO2_PPM_LOWER <= concentration_ppm <= \
+                        CONFIG.hyper_parameters.CO2_PPM_UPPER:
+                    best_co2_centres[centre] = value
+                    co2_concs.append(concentration_ppm)
+                else:
+                    noise[centre] = value
+            else:
+                best_co2_centres[centre] = value
+                co2_concs.append(concentration_ppm)
 
     for centre, value in strong_h2o_lines.items():
+        h2o_concentration = peak_params[value["peak_idx"]]["area"] / value[
+            "line_strength"]
+        h2o_conc_ppm = utils.molecules_per_cm3_to_ppm(h2o_concentration)
         if value.get("ambiguous"):
+            if resolution_helper:
+                co2_peak_idx = weak_co2_lines[centre]["peak_idx"]
+                co2_line_strength = weak_co2_lines[centre]["line_strength"]
+                co2_concentration = peak_params[co2_peak_idx]["area"] / co2_line_strength
+                concentration_ppm = utils.molecules_per_cm3_to_ppm(co2_concentration)
+                if CONFIG.hyper_parameters.CO2_PPM_LOWER <= concentration_ppm <= \
+                        CONFIG.hyper_parameters.CO2_PPM_UPPER:
+                    best_co2_centres[centre] = value
+                    co2_concs.append(concentration_ppm)
+                else:
+                    best_h2o_centres[centre] = value
+                    h2o_concs.append(h2o_conc_ppm)
+                del weak_co2_lines[centre]
+            else:
+                if weak_co2_lines[centre]["line_strength"] > value["line_strength"]:
+                    ambiguous_peaks[centre] = value
+                else:
+                    p_params = peak_params[value["peak_idx"]]
+                    other_h2o_centres[centre] = value
+                    other_h2o_y.append(
+                        utils.pseudo_voigt_profile(centre, p_params["ratio"],
+                                                   p_params["area"], centre,
+                                                   p_params['fwhm']))
+                del weak_co2_lines[centre]
+        else:
+            best_h2o_centres[centre] = value
+            h2o_concs.append(h2o_conc_ppm)
+
+    # Just need to see if good CO2 peaks can be extracted from "weak ambiguous" matches
+    for centre, value in weak_ambiguous.items():
+        if resolution_helper:
+            co2_concentration = (peak_params[value["co2"]["peak_idx"]]["area"] /
+                                 value["co2"]["line_strength"])
+            concentration_ppm = utils.molecules_per_cm3_to_ppm(co2_concentration)
+            if CONFIG.hyper_parameters.CO2_PPM_LOWER <= concentration_ppm <= \
+                    CONFIG.hyper_parameters.CO2_PPM_UPPER:
+                best_co2_centres[centre] = value
+                co2_concs.append(concentration_ppm)
+            else:
+                weak_h2o_lines[centre] = value["h2o"]
+        else:
             ambiguous_peaks[centre] = value
-        if centre not in ambiguous_peaks and centre not in blended_peaks:
-            concentration = peak_params[value["peak_idx"]]["area"] / value[
-                "line_strength"]
-            concentration_ppm = utils.molecules_per_cm3_to_ppm(concentration)
-            strong_h2o_centres.append(centre)
-            h2o_concs.append(concentration_ppm)
-            params = peak_params[value["peak_idx"]]
-            x_h2o_vals.append(centre)
-            y_h2o_vals.append(
-                utils.pseudo_voigt_profile(centre, params['ratio'], params['area'],
-                                           centre, params['fwhm']))
-            print(
-                f"H2O: line_strength: {value['line_strength']:.3e}, "
-                f"Centre: {round(centre, 2)}, "
-                f"Conc.: {concentration:.3e} molecules/cm3, "
-                f"{round(concentration_ppm, 3)} ppm")
 
-    print(f"\n{len(strong_co2_centres)} strong unique CO2 peaks found: "
-          f"\n{np.round(strong_co2_centres, 3)}")
-    print(f"\n{len(strong_h2o_centres)} strong unique H2O peaks found: "
-          f"\n{np.round(strong_h2o_centres, 3)}")
-    print(f"\n{len(ambiguous_peaks)} strong H2O or CO2 (ambiguous) peaks found: "
+    # estimate concentration from secondary peaks if no best ones are present
+    if len(best_co2_centres) == 0:
+        for centre, value in other_co2_centres.items():
+            co2_concs.append(
+                utils.molecules_per_cm3_to_ppm(
+                    peak_params[value["peak_idx"]]["area"] / value["line_strength"]
+                )
+            )
+    if len(best_h2o_centres) == 0:
+        for centre, value in other_h2o_centres.items():
+            h2o_concs.append(
+                utils.molecules_per_cm3_to_ppm(
+                    peak_params[value["peak_idx"]]["area"] / value["line_strength"]
+                )
+            )
+
+    # Printing concentrations and best centres
+    for i, (centre, value) in enumerate(best_co2_centres.items()):
+        params = peak_params[value["peak_idx"]]
+        best_co2_y.append(y[peaks[value["peak_idx"]]])
+        best_co2_x.append(x[peaks[value["peak_idx"]]])
+        print(
+            f"CO2: line_strength: {value['line_strength']:.3e}, "
+            f"Centre: {round(centre, 2)}, "
+            f"Conc.: {round(co2_concs[i], 3)} ppm, FWHM: {params["fwhm"]}")
+    for i, (centre, value) in enumerate(best_h2o_centres.items()):
+        params = peak_params[value["peak_idx"]]
+        best_h2o_y.append(y[peaks[value["peak_idx"]]])
+        best_h2o_x.append(x[peaks[value["peak_idx"]]])
+        print(
+            f"H2O: line_strength: {value['line_strength']:.3e}, "
+            f"Centre: {round(centre, 2)}, "
+            f"Conc.: {round(h2o_concs[i], 3)} ppm, FWHM: {params["fwhm"]}")
+
+    print(f"\n{len(weak_co2_lines)} weak CO2 peaks found: "
+          f"\n{np.round(list(weak_co2_lines.keys()), 3)}")
+    print(f"\n{len(weak_h2o_lines)} weak H2O peaks found: "
+          f"\n{np.round(list(weak_h2o_lines.keys()), 3)}")
+    print(f"\n{len(best_co2_centres)} best CO2 peaks found: "
+          f"\n{np.round(list(best_co2_centres.keys()), 3)}")
+    print(f"\n{len(best_h2o_centres)} best H2O peaks found: "
+          f"\n{np.round(list(best_h2o_centres.keys()), 3)}")
+    print(f"\n{len(other_co2_centres)} secondary (needs further analysis) CO2 peaks "
+          f"found: \n{np.round(list(other_co2_centres.keys()), 3)}")
+    print(f"\n{len(other_h2o_centres)} secondary (needs further analysis) H2O peaks "
+          f"found: \n{np.round(list(other_h2o_centres.keys()), 3)}")
+    print(f"\n{len(ambiguous_peaks)} H2O or CO2 (ambiguous) peaks found: "
           f"\n{np.round(list(ambiguous_peaks.keys()), 3)}")
-    print(f"\n{len(blended_peaks)} possibly water blended or noisy peaks found: "
-          f"\n{np.round(list(blended_peaks), 3)}")
+    print(f"\n{len(noise)} possibly congested or noisy peaks found: "
+          f"\n{np.round(list(noise.keys()), 3)}")
 
+    # plotting!
     plot_args = [
         {"args": (x, y), "kwargs": {"label": "Absorption Coefficient"}}
     ]
-    if len(x_co2_vals) != 0:
-        plot_args.append({"args": (x_co2_vals, y_co2_vals, 'gx'),
-                          "kwargs": {"ms": 9, "label": "CO2 absorption peak"}})
-    if len(x_h2o_vals) != 0:
-        plot_args.append({"args": (x_h2o_vals, y_h2o_vals, 'rx'),
-                          "kwargs": {"ms": 9, "label": "H2O absorption peak"}})
+    if len(best_co2_centres) != 0:
+        plot_args.append({"args": (best_co2_x, best_co2_y, 'gx'),
+                          "kwargs": {"ms": 10, "label": "Best CO2 absorption peak"}})
+    if len(best_h2o_centres) != 0:
+        plot_args.append({"args": (best_h2o_x, best_h2o_y, 'rx'),
+                          "kwargs": {"ms": 10, "label": "Best H2O absorption peak"}})
+    if len(other_co2_centres) != 0:
+        plot_args.append({"args": (other_co2_x, other_co2_y, 'x'),
+                          "kwargs": {"ms": 10, "label": "Secondary CO2 absorption peak",
+                                     "color": "cyan"}})
+    if len(other_h2o_centres) != 0:
+        plot_args.append({"args": (other_h2o_x, other_h2o_y, 'x'),
+                          "kwargs": {"ms": 10, "label": "Secondary H2O absorption peak",
+                                     "color": "magenta"}})
 
     discarded_label_added = False
     for i in range(len(x_peaks_plot)):
@@ -676,4 +744,11 @@ def peak_assignment_and_ambiguity_resolution(strong_co2_lines: Dict[float, dict]
                       x_label=r'$Wavenumber\ (cm^{-1})$',
                       y_label=r"$Absorption\ Coefficient\ (cm^{-1})$", legend=True,
                       y_lim=(-2e-6, None))
-    return co2_concs, h2o_concs
+    secondary_peaks_used = {
+        "co2": True if len(best_co2_centres) == 0 and len(
+            other_co2_centres) != 0 else False,
+        "h2o": True if len(best_h2o_centres) == 0 and len(
+            other_h2o_centres) != 0 else False
+    }
+    return (co2_concs, h2o_concs, len(other_co2_centres), len(other_h2o_centres),
+            len(ambiguous_peaks), len(noise), secondary_peaks_used)
