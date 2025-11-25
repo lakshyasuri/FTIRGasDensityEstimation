@@ -4,10 +4,7 @@ from typing import List, Dict, Tuple, Union
 import numpy.typing as npt
 import numpy as np
 import pandas as pd
-from scipy.sparse import diags, dia_matrix, linalg
-from scipy.sparse.linalg import spsolve
 from scipy.special import wofz
-from sklearn.preprocessing import SplineTransformer
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 from types import SimpleNamespace
 
@@ -186,49 +183,6 @@ def pseudo_voigt_derivates(x: Union[npt.NDArray[np.float64], float], ratio: floa
     return d_ratio, d_amp, d_centre, d_fwhm
 
 
-def voigt_profile(x: npt.NDArray[np.float64], A: float, mu: float, sigma: float,
-                  gamma: float):
-    sigma = max(sigma, 1e-8)
-    gamma = max(gamma, 1e-8)
-    z = ((x - mu) + 1J * gamma) / (sigma * np.sqrt(2))
-    return (A * wofz(z).real) / (sigma * np.sqrt(2 * np.pi))
-
-
-def voigt_derivatives(x: npt.NDArray[np.float64], A: float, mu: float, sigma: float,
-                      gamma: float):
-    sigma = max(sigma, 1e-8)
-    gamma = max(gamma, 1e-8)
-    xc = x - mu
-    z = (xc + 1J * gamma) / (sigma * np.sqrt(2))
-    wofz_out = wofz(z)
-
-    V = wofz_out.real / (sigma * np.sqrt(2 * np.pi))
-    # dV/dA
-    dA = V
-    # dV/dmu
-    dmu = ((xc * wofz_out.real) - (gamma * wofz_out.imag)) / (
-            (sigma ** 3) * np.sqrt(2 * np.pi))
-    # dV/dsigma
-    dsigma = (((xc ** 2 - gamma ** 2 - sigma ** 2) * wofz_out.real -
-               2 * xc * gamma * wofz_out.imag + gamma * sigma * np.sqrt(2 / np.pi)) /
-              (sigma ** 4 * np.sqrt(2 * np.pi)))
-    # dV/dgamma
-    dgamma = -(sigma * np.sqrt(
-        2 / np.pi) - xc * wofz_out.imag - gamma * wofz_out.real) / (
-                     sigma ** 3 * np.sqrt(2 * np.pi))
-
-    return dA, A * dmu, A * dsigma, A * dgamma
-
-
-def create_splines_pipeline(knot_vector: npt.NDArray, degree: int = 3,
-                            extrapolation: str = 'continue'):
-    if len(knot_vector.shape) < 2:
-        knot_vector = knot_vector[:, np.newaxis]
-
-    return SplineTransformer(degree=degree, extrapolation=extrapolation,
-                             knots=knot_vector)
-
-
 def evaluate_model(beta: npt.NDArray, x: npt.NDArray, n_peaks: int):
     y_hat = np.zeros_like(x)
     peak_params = beta.reshape(n_peaks, 4)
@@ -255,7 +209,6 @@ def jacobian_of_loss(beta: npt.NDArray, x: npt.NDArray, y: npt.NDArray, n_peaks:
 
     # peak gradients
     peak_params = beta.reshape(n_peaks, 4)
-    jacobian_peak = []  # final J_voigt shape -> (n, 4*n_peaks)
     for i, (ratio, amp, centre, fwhm) in enumerate(peak_params):
         idx = i * 4
         d_ratio, d_amp, d_centre, d_fwhm = pseudo_voigt_derivates(x=x, ratio=ratio,
@@ -267,8 +220,6 @@ def jacobian_of_loss(beta: npt.NDArray, x: npt.NDArray, y: npt.NDArray, n_peaks:
         gradient[idx + 1] = -2 * np.sum(residuals * d_amp)
         gradient[idx + 2] = -2 * np.sum(residuals * d_centre)
         gradient[idx + 3] = -2 * np.sum(residuals * d_fwhm)
-    # J_voigt = np.concatenate(jacobian_peak, axis=1)
-    # gradient[n_spline_coeffs: ] = -2 * (J_voigt.T @ residuals)
     return gradient
 
 
@@ -300,28 +251,9 @@ def molecules_per_cm3_to_ppm(N_gas: float):
     return N_gas / 2.46e13
 
 
-def calculate_standard_errors_pspline(residuals, B, w, lam, data_length):
-    n, k = B.shape
-    print(n, data_length)
-    D = diags([1, -2, 1], [0, 1, 2], shape=(k - 2, k)).tocsc()
-    W = dia_matrix((w, 0), shape=(data_length, data_length)).tocsr()
-
-    P = lam * D.T @ D
-    M = B.T @ W @ B
-    LHS = M + P
-    H = spsolve(LHS, M)
-    df_eff = np.trace(H.toarray())
-
-    w_rss = residuals.T @ W @ residuals
-    res_var = w_rss / (n - df_eff)
-    LHS_inv = linalg.inv(LHS)
-    COV = res_var * LHS_inv
-
-    SE_coeff = np.sqrt(COV.diagonal())
-    return df_eff, SE_coeff
-
-
 def bootstrap_ci_calculation(values, alpha=0.05, n_boot=1000):
+    if len(values) == 0:
+        return None, None, None
     rng = np.random.default_rng(None)
     n = len(values)
     means = [rng.choice(values, n, replace=True).mean() for _ in range(n_boot)]
