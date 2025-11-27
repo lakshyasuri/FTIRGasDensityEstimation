@@ -4,11 +4,11 @@ from pathlib import Path
 import numpy as np
 from typing import Literal
 
-from config import CONFIG
+from spectral_analyser.config import CONFIG
 
 
 def fetch_data():
-    directory = Path(__file__).resolve().parent
+    directory = Path.home()
     hitran_dir = directory / CONFIG.HITRAN_DATA_DIR
     gas_path_1 = hitran_dir / CONFIG.HITRAN_DATA_NAME_1
     gas_path_2 = hitran_dir / CONFIG.HITRAN_DATA_NAME_2

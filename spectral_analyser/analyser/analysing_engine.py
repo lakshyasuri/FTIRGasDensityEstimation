@@ -7,16 +7,16 @@ from scipy.signal import find_peaks, peak_prominences, savgol_filter
 from pybaselines import Baseline
 import numpy.typing as npt
 import time
-from typing import List, Tuple, Any, Union, Dict
+from typing import List, Tuple, Union, Dict
 from scipy.optimize import minimize, least_squares
 from pathlib import Path
 import warnings
 import multiprocessing
 import json
 
-import utils
-from HITRAN import fetch_data, get_hitran_strength_threshold
-from config import CONFIG
+from spectral_analyser import utils
+from spectral_analyser.HITRAN import fetch_data, get_hitran_strength_threshold
+from spectral_analyser.config import CONFIG
 
 
 def baseline_wrapper(kwargs):
@@ -116,24 +116,10 @@ def peak_finding_process(x: pd.Series, y: pd.Series, window_len: float,
 
 
 def get_low_standard_deviation_regions(x: Union[pd.Series, npt.NDArray[float]],
-                                       y: Union[pd.Series, npt.NDArray[float]],
-                                       file_name: str):
+                                       y: Union[pd.Series, npt.NDArray[float]]):
     window_size, gauss_sigma = 201, 200
-    _directory = Path(__file__).resolve().parent / "intermediate_data_files"
-    file_path = _directory / file_name
-    if not file_path.is_file():
-        _directory.mkdir(exist_ok=True)
-        sd_vals = utils.find_statistic_symmetrically(x, y, window_size=window_size,
-                                                     statistic='std', assume_sorted=True)
-        pd.DataFrame(data={"wavenumber": x, "intensity_sd": sd_vals}).to_csv(file_path,
-                                                                             index=False)
-        print(f"Saving rolling standard deviations of intensity with a window size of "
-              f"{window_size} to path {file_path}")
-    else:
-        print(f"Rolling standard deviations for intensity file found. "
-              f"Reading it from {file_path}")
-        sd_vals = pd.read_csv(file_path)["intensity_sd"].to_numpy()
-
+    sd_vals = utils.find_statistic_symmetrically(x, y, window_size=window_size,
+                                                 statistic='std', assume_sorted=True)
     sd_threshold = np.median(sd_vals)
     smoothed_sd = gaussian_filter1d(sd_vals, sigma=gauss_sigma)
 
@@ -209,8 +195,7 @@ def baseline_estimation_process(x: Union[pd.Series, npt.NDArray[float]],
     y_smoothed = savgol_filter(y_positive, window_length=100, polyorder=2)
 
     if compute_baseline or hyper_params.BEST_LAM is None:
-        file_name = file_name.replace(".dpt", f"_intensity_rolling_sd.csv")
-        y_sd, low_sd_regions, _ = get_low_standard_deviation_regions(x, -y, file_name)
+        y_sd, low_sd_regions, _ = get_low_standard_deviation_regions(x, -y)
         good_regions, discarded_regions = low_intensity_filtering(-y, low_sd_regions,
                                                                   hyper_params.REGION_THRESHOLD)
         good_regions_x = [f"{x[val[0]]} to {x[val[1] - 1]}" for val in good_regions]
