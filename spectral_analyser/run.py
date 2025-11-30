@@ -41,13 +41,13 @@ def main():
     parser.add_argument('file_path', type=Path,
                         help="Path of the FTIR data file. Can also be a directory "
                              "containing multiple files.")
-    parser.add_argument('--plot', action='store_true', help="Flag to show plots")
+    parser.add_argument('--plot', action='store_true', help="Argument to show plots")
     parser.add_argument('--compute_baseline', action='store_true',
-                        help="Compute a new baseline if the flag is used, else use the "
+                        help="Compute a new baseline if this argument is used, else use the "
                              "previous one.")
     parser.add_argument('--lbfgs', action='store_true',
                         help='Fit Pseudo-Voigt profile to absorption peaks using L-BFGS-B'
-                             ' algorithm. If the flag is not provided, '
+                             ' algorithm. If the argument is not provided, '
                              'the default non-linear least squares algorithm is used.')
     args = parser.parse_args()
     initialise_process(args.file_path, args.plot, args.compute_baseline,
