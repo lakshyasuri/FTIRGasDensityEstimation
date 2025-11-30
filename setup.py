@@ -9,6 +9,8 @@ setup(
     package_data={
         'spectral_analyser': ['config.json']
     },
+    use_scm_version=True,
+    setup_requires=["setuptools_scm"],
     install_requires=[
         line.strip()
         for line in open('requirements.txt').readlines()
