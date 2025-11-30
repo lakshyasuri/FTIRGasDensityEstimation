@@ -2,7 +2,9 @@ from setuptools import setup, find_packages
 
 setup(
     name="FTIR-Gas-Density-Estimation",
-    version="0.1.0",
+    version="1.0.0",
+    author="Lakshya Suri",
+    author_email="lakshyasuri3@gmail.com",
     packages=find_packages(),
     package_data={
         'spectral_analyser': ['config.json']
