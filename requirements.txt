@@ -6,3 +6,4 @@ numpy
 pybaselines
 hitran-api
 pandas-stubs
+numba

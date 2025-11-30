@@ -3,17 +3,18 @@ from pathlib import Path
 import pandas as pd
 import matplotlib.pyplot as plt
 import time
+import os
 
-from spectral_analysis import start_analysis
-from config import CONFIG
+from spectral_analyser.analyser.spectral_analysis import start_analysis
+from spectral_analyser.config import CONFIG
 
 
-def initialise_process(directory: Path, filename: str = None, plot: bool = True,
+def initialise_process(file_path: Path, plot: bool = True,
                        compute_baseline: bool = False, lbfgs: bool = False):
-    if not filename:
-        file_list = [x for x in directory.glob("*.dpt") if x.is_file()]
+    if file_path.is_dir():
+        file_list = [x for x in file_path.glob("*.dpt") if x.is_file()]
     else:
-        file_list = [directory / filename]
+        file_list = [file_path]
     start = time.time()
     for file in file_list:
         print(f"\nProcessing file: {file.name}")
@@ -30,11 +31,16 @@ def initialise_process(directory: Path, filename: str = None, plot: bool = True,
         plt.show()
 
 
-if __name__ == "__main__":
+def main():
+    project_root = os.path.dirname(os.path.abspath(__file__))
+    os.chdir(project_root)
+    print(f"Running from: {os.getcwd()}")
+
     parser = ArgumentParser(description="Runner script which initialises the process of "
                                         "gas identification and density estimation")
-    parser.add_argument('directory', type=Path, help="Directory of the FTIR data files")
-    parser.add_argument('--filename', required=False, help="Name of the file to process")
+    parser.add_argument('file_path', type=Path,
+                        help="Path of the FTIR data file. Can also be a directory "
+                             "containing multiple files.")
     parser.add_argument('--plot', action='store_true', help="Flag to show plots")
     parser.add_argument('--compute_baseline', action='store_true',
                         help="Compute a new baseline if the flag is used, else use the "
@@ -44,6 +50,9 @@ if __name__ == "__main__":
                              ' algorithm. If the flag is not provided, '
                              'the default non-linear least squares algorithm is used.')
     args = parser.parse_args()
-    print(args.lbfgs)
-    initialise_process(args.directory, args.filename, args.plot, args.compute_baseline,
+    initialise_process(args.file_path, args.plot, args.compute_baseline,
                        args.lbfgs)
+
+
+if __name__ == "__main__":
+    main()

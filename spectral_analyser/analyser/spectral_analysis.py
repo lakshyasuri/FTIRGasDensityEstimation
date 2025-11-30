@@ -4,9 +4,9 @@ from pathlib import Path
 from scipy.ndimage import gaussian_filter1d
 from scipy.signal import find_peaks
 
-import utils
-from config import CONFIG
-import analysing_engine as ae
+from spectral_analyser import utils
+from spectral_analyser.config import CONFIG
+import spectral_analyser.analyser.analysing_engine as ae
 
 
 def process_data(df: pd.DataFrame, x_name: str, y_name: str, f_path: Path,
