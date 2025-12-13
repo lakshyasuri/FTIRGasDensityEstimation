@@ -338,7 +338,7 @@ def curve_and_peak_fitting_process(x: Union[pd.Series, np.ndarray],
                 if "outside of provided bounds" in str(e):
                     warnings.warn(f"Found an abnormal peak at centre {mu0}. "
                                   f"Fitting routine threw the error: {str(e)}. "
-                                  f"Ignoring this peak and moving ahead")
+                                  f"Ignoring this peak (centre: {mu0}) and moving ahead")
                     voigt_p_list.append({"discard": True, "centre": mu0})
                     no_fits.append(mu0)
                     continue
@@ -353,7 +353,11 @@ def curve_and_peak_fitting_process(x: Union[pd.Series, np.ndarray],
                          'gtol': 1e-15}
             )
         if not min_result.success:
-            raise Exception(f"Optimization warning: {min_result}")
+            warnings.warn(f"Pseudo_Voigt fit warning: {min_result.message}. "
+                          f"Ignoring this peak (centre: {mu0}) and moving ahead")
+            voigt_p_list.append({"discard": True, "centre": mu0})
+            no_fits.append(mu0)
+            continue
         optimal_params.append(min_result.x)
 
         l_idx_eval = l_idx - 33 if l_idx >= 33 else l_idx
