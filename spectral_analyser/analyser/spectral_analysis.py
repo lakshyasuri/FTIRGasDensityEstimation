@@ -11,15 +11,15 @@ import spectral_analyser.analyser.analysing_engine as ae
 
 def process_data(df: pd.DataFrame, x_name: str, y_name: str, f_path: Path,
                  to_discard: list[tuple[int]]):
-    x, y, = [], []
-    for i, (left, right) in enumerate(to_discard):
-        if i != len(to_discard) - 1:
-            y.extend(df[y_name].iloc[right: to_discard[i + 1][0]].values)
-            x.extend(df[x_name].iloc[right: to_discard[i + 1][0]].values)
-        else:
-            y.extend(df[y_name].iloc[right: df.shape[0]].values)
-            x.extend(df[x_name].iloc[right: df.shape[0]].values)
-    x, y = np.array(x), np.array(y)
+    if not to_discard:
+        x = df[x_name].to_numpy()
+        y = df[y_name].to_numpy()
+    else:
+        mask = np.ones(len(df), dtype=bool)
+        for left, right in to_discard:
+            mask[left:right] = False
+        x = df.loc[mask, x_name].to_numpy()
+        y = df.loc[mask, y_name].to_numpy()
 
     y_avg = utils.find_statistic_symmetrically(x, y, window_size=101,
                                                statistic='mean', assume_sorted=True)
@@ -45,6 +45,16 @@ def process_data(df: pd.DataFrame, x_name: str, y_name: str, f_path: Path,
     if len(curr_region) >= min_length:
         straight_regions.append((curr_region[0], curr_region[-1] + 1))
 
+    if not straight_regions:
+        raise Exception(f"Unable to identify any absorption coefficient regions with "
+                        f"relatively low standard deviation. Try increasing the value of "
+                        f"the ALPHA_COEFF_GRAD_STD parameter. Current value: "
+                        f"{CONFIG.hyper_parameters.ALPHA_COEFF_GRAD_STD}.")
+
+    print(f"\nSelecting relatively straight regions from the absorption coefficient "
+          "spectrum after discarding the low intensity regions: "
+          f"\n{[f'{x[left]} to {x[right - 1]}' for left, right in straight_regions]}")
+
     straight_regions_x, straight_regions_y = [], []
     for start, end in straight_regions:
         straight_regions_x.append((x[start], x[end - 1]))
@@ -57,9 +67,6 @@ def process_data(df: pd.DataFrame, x_name: str, y_name: str, f_path: Path,
     peak_treshold = np.quantile(prominences, CONFIG.hyper_parameters.PEAK_PROMINENCE)
     print(peak_treshold)
 
-    print(f"\nSelecting relatively straight regions from the absorption coefficient "
-          "spectrum after discarding the low intensity regions: "
-          f"\n{[f'{x[left]} to {x[right - 1]}' for left, right in straight_regions]}")
 
     axv_args = [{"args": (x[start], x[end - 1]),
                  "kwargs": dict(color='green', alpha=0.4)} for start, end in
@@ -67,8 +74,6 @@ def process_data(df: pd.DataFrame, x_name: str, y_name: str, f_path: Path,
     axv_args[0]["kwargs"]["label"] = "shortlisted region"
     plot_args = [
         {"args": (df[x_name], df[y_name])}
-        # {"args": (df[x_name], y_avg)},
-        # {"args": (x, y_avg_smooth)}
     ]
     utils.create_plot(plot_args=plot_args,
                       figure_args=dict(figsize=(10, 8)),
@@ -195,15 +200,25 @@ def start_analysis(df: pd.DataFrame, x_name: str, y_name: str, f_path: Path,
 
     co2_mean, co2_lower, co2_upper = utils.bootstrap_ci_calculation(co2_concentration)
     h2o_mean, h2o_lower, h2o_upper = utils.bootstrap_ci_calculation(h2o_concentration)
+
+    if all([co2_mean, co2_lower, co2_upper]):
+        co2_mean = round(co2_mean, 3)
+        co2_lower = round(co2_lower, 3)
+        co2_upper = round(co2_upper, 3)
+    if all([h2o_mean, h2o_lower, h2o_upper]):
+        h2o_mean = round(h2o_mean, 3)
+        h2o_lower = round(h2o_lower, 3)
+        h2o_upper = round(h2o_upper, 3)
+
     if print_str_co2 is not None:
         print(f"\n{print_str_co2}")
-    print("Mean CO2 concentration: ", round(co2_mean, 3), " ppm")
+    print("Mean CO2 concentration: ", co2_mean, " ppm")
     if print_str_h2o is not None:
         print(f"\n{print_str_h2o}")
-    print(f"Mean H2O concentration: {round(h2o_mean, 3)} ppm")
+    print(f"Mean H2O concentration: {h2o_mean} ppm")
     print("\nCO2 mean concentration with confidence intervals (alpha=0.05): \n",
-          f"lower bound: {round(co2_lower, 3)}, mean: {round(co2_mean, 3)}, "
-          f"upper bound: {round(co2_upper, 3)} ppm")
+          f"lower bound: {co2_lower}, mean: {co2_mean}, "
+          f"upper bound: {co2_upper} ppm")
     print("\nH2O mean concentration with confidence intervals (alpha=0.05): \n",
-          f"lower bound: {round(h2o_lower, 3)}, mean: {round(h2o_mean, 3)}, "
-          f"upper bound {round(h2o_upper, 3)} ppm")
+          f"lower bound: {h2o_lower}, mean: {h2o_mean}, "
+          f"upper bound {h2o_upper} ppm")
